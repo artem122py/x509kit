@@ -131,6 +131,51 @@ Run it yourself:
 
     python test_all.py
 
+## Compatibility with cryptography
+
+Run this yourself — it verifies that x509kit and `cryptography` agree
+in **both directions**, for every primitive:
+
+    python compat_test.py
+
+Expected output:
+
+    ============================================================
+      x509kit ↔ cryptography
+    ============================================================
+
+    1. RSA PKCS#1 v1.5
+      ✓ наш RSA sign → их verify
+      ✓ их RSA sign → наш verify
+
+    2. Ed25519 (RFC 8032)
+      ✓ seed → тот же pubkey
+      ✓ наш Ed sign → их verify
+      ✓ их Ed sign → наш verify
+
+    3. ECDSA P-256
+      ✓ наш EC sign → их verify
+      ✓ их EC sign → наш verify
+
+    4. X.509 сертификат
+      ✓ наш PEM → их x509 парсер
+      ✓ серийник совпадает
+      ✓ их PEM → наш Cert парсер
+
+    5. Полная цепочка
+      ✓ их SAN читает наш leaf
+      ✓ их CA парсится нашим CACert
+
+    ============================================================
+      12/12 passed
+    ============================================================
+
+This is not a self-test. Every check calls into `cryptography` (which
+links against OpenSSL) and asks it to verify our output, or vice versa.
+If any row fails, our implementation is wrong.
+
+Requires: `pip install cryptography`
+
 ## What this is
 
 A learning project that turned into a working implementation. It exists
