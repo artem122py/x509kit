@@ -13,6 +13,8 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
   * PKCS#8 EncryptedPrivateKeyInfo (PBES2 + PBKDF2 + AES-256-CBC/GCM)
   * PKCS#12 (.p12/.pfx) — export/import/verify, совместим с OpenSSL
   * RFC 4518 канонизация DN
+  * ACME (RFC 8555) — совместим с certbot
+  * Certificate Transparency (RFC 6962) — SCT parsing
 
 ═══════════════════════════════════════════════════════════════════════
   Ключи
@@ -242,6 +244,54 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     #   openssl pkcs12 -in file.p12 -nodes -out extracted.pem
 
 ═══════════════════════════════════════════════════════════════════════
+  ACME (RFC 8555)
+═══════════════════════════════════════════════════════════════════════
+
+    ACMEServer(ca, ca_key, base_url, chain=[...], cert_days=90,
+               auto_verify=False)
+        ^ минимальный ACME-сервер с http-01 challenge
+
+    srv.directory()
+    srv.new_account(jwk, {"termsOfServiceAgreed": True})
+    srv.new_order(kid, {"identifiers": [{"type": "dns", "value": "x"}]})
+    srv.finalize(order_id, {"csr": b64u(csr.der)})
+    srv.get_certificate(cert_id)
+
+    # Persistence (JSON state):
+    srv.save("state.json")
+    srv = ACMEServer.load(ca, ca_key, "state.json", base_url=...)
+    srv = ACMEServer.from_dict(ca, ca_key, data)
+    data = srv.to_dict()
+
+    ACMEError — тип urn:ietf:params:acme:error:<kind>
+
+    b64u(data) / b64u_decode(s)          — base64url (RFC 4648 §5)
+    jwk_to_key(jwk) / jwk_thumbprint(jwk) — RFC 7517 / RFC 7638
+    verify_jws(jws, expected_url=...,     — RFC 7515
+               nonce_checker=..., key_resolver=...)
+
+    Поддерживаемые JWS алгоритмы:
+        EdDSA (Ed25519), ES256/ES384/ES512, RS256
+
+    Проверено с certbot (ISRG / Let's Encrypt):
+        certbot certonly --server http://127.0.0.1:14000/directory ...
+
+    Примеры:
+        python examples/13_acme_server.py --auto-verify
+        python examples/14_acme_client.py
+
+═══════════════════════════════════════════════════════════════════════
+  Certificate Transparency (RFC 6962 §3.3)
+═══════════════════════════════════════════════════════════════════════
+
+    cert.sct_list      — список embedded Signed Certificate Timestamps
+        каждый: {version, log_id, timestamp_iso, hash_alg, sig_alg, ...}
+    cert.has_sct       — True, если SCT present
+    OID_SCT            — "1.3.6.1.4.1.11129.2.4.2"
+
+    Пример: python examples/15_ct_sct.py www.google.com
+
+═══════════════════════════════════════════════════════════════════════
   Исключения и предупреждения
 ═══════════════════════════════════════════════════════════════════════
 
@@ -309,7 +359,7 @@ from .x509 import (
     EKU_OIDS,
     # OID-константы
     OID_RSA_PSS, OID_NAME_CONSTR,
-    OID_AIA, OID_AD_CA_ISSUERS,
+    OID_AIA, OID_AD_CA_ISSUERS, OID_SCT,
     OID_PBES2, OID_PBKDF2, OID_HMAC_SHA256,
     OID_AES_256_CBC, OID_AES_256_GCM,
     # Исключения
@@ -352,7 +402,7 @@ __all__ = [
     "EKU_OIDS",
     # OID-константы
     "OID_RSA_PSS", "OID_NAME_CONSTR",
-    "OID_AIA", "OID_AD_CA_ISSUERS",
+    "OID_AIA", "OID_AD_CA_ISSUERS", "OID_SCT",
     "OID_PBES2", "OID_PBKDF2", "OID_HMAC_SHA256",
     "OID_AES_256_CBC", "OID_AES_256_GCM",
     # Исключения

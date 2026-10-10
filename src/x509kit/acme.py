@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import secrets
 import time
 import urllib.request
@@ -536,3 +537,84 @@ class ACMEServer:
         for d in c["chain_der"]:
             pem += _C(d).to_pem()
         return pem
+
+    # ---- persistence ------------------------------------------------
+
+    def to_dict(self) -> dict:
+        """Всё состояние сервера в JSON-совместимый dict."""
+        return {
+            "version": 1,
+            "base_url": self.base_url,
+            "cert_days": self.cert_days,
+            "accounts": {
+                kid: {
+                    "jwk": acc["jwk"],
+                    "contact": acc["contact"],
+                    "created": acc["created"],
+                } for kid, acc in self.accounts.items()
+            },
+            "orders": {oid: dict(o) for oid, o in self.orders.items()},
+            "authzs": {aid: dict(a) for aid, a in self.authzs.items()},
+            "chals": {cid: dict(c) for cid, c in self.chals.items()},
+            "certs": {
+                cid: {
+                    "der": b64u(c["der"]),
+                    "chain_der": [b64u(d) for d in c["chain_der"]],
+                    "order": c["order"],
+                } for cid, c in self.certs.items()
+            },
+        }
+
+    def save(self, path: str) -> str:
+        """Сохранить состояние сервера в JSON-файл. Возвращает путь."""
+        path = os.path.expanduser(path)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2, sort_keys=True)
+        return path
+
+    @classmethod
+    def from_dict(cls, ca, ca_key, data: dict, *,
+                  chain=None, auto_verify=False) -> "ACMEServer":
+        """Восстановить сервер из dict (см. to_dict)."""
+        srv = cls(
+            ca, ca_key,
+            data["base_url"],
+            chain=chain,
+            cert_days=data.get("cert_days", 90),
+            auto_verify=auto_verify,
+        )
+        for kid, acc in data.get("accounts", {}).items():
+            srv.accounts[kid] = {
+                "jwk": acc["jwk"],
+                "key": jwk_to_key(acc["jwk"]),
+                "contact": acc.get("contact", []),
+                "created": acc.get("created", time.time()),
+            }
+        for oid, o in data.get("orders", {}).items():
+            srv.orders[oid] = dict(o)
+        for aid, a in data.get("authzs", {}).items():
+            srv.authzs[aid] = dict(a)
+        for cid, c in data.get("chals", {}).items():
+            srv.chals[cid] = dict(c)
+        for cid, c in data.get("certs", {}).items():
+            srv.certs[cid] = {
+                "der": b64u_decode(c["der"]),
+                "chain_der": [b64u_decode(d) for d in c["chain_der"]],
+                "order": c["order"],
+            }
+        return srv
+
+    @classmethod
+    def load(cls, ca, ca_key, path: str, *,
+             chain=None, auto_verify=False) -> "ACMEServer":
+        """Загрузить сервер из JSON-файла. Если файла нет — создать пустой."""
+        path = os.path.expanduser(path)
+        if not os.path.exists(path):
+            return cls(ca, ca_key,
+                       data["base_url"] if "data" in dir() else "http://localhost",
+                       chain=chain, auto_verify=auto_verify)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return cls.from_dict(ca, ca_key, data,
+                             chain=chain, auto_verify=auto_verify)
+

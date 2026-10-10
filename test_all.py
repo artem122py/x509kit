@@ -1150,6 +1150,123 @@ def test_pkcs12_shortcuts():
         T.ok("пустой bundle → X509Error")
 
 
+
+# ======================================================================
+#  20. Certificate Transparency (SCT) + ACME persistence
+# ======================================================================
+
+def test_sct_parsing():
+    hr("20. Certificate Transparency (SCT)")
+
+    # 1. Синтетический SCT list — сконструируем вручную
+    from x509kit.x509 import _parse_sct_list, _parse_sct
+    from x509kit.x509 import der_seq, der_octet, der_int
+
+    # Один SCT: version=0, log_id=32 байта, ts=1700000000000, ext=0, sig
+    log_id = bytes.fromhex("aa" * 32)
+    ts_ms = 1700000000000
+    # DigitallySigned ::= SEQUENCE { INTEGER 4, INTEGER 3, OCTET STRING(sig) }
+    dsig = der_seq(der_int(4), der_int(3), der_octet(b"\x00" * 71))
+    sct_raw = (b"\x00" + log_id + ts_ms.to_bytes(8, "big")
+               + b"\x00\x00" + dsig)
+    sct_with_len = len(sct_raw).to_bytes(2, "big") + sct_raw
+    sct_list_body = len(sct_with_len).to_bytes(2, "big") + sct_with_len
+    inner_octet = der_octet(sct_list_body)
+
+    parsed = _parse_sct_list(inner_octet)
+    T.expect("SCT: один записан", len(parsed) == 1)
+    if parsed:
+        s = parsed[0]
+        T.expect("SCT version = 0", s["version"] == 0)
+        T.expect("SCT log_id совпадает", s["log_id"] == "aa" * 32)
+        T.expect("SCT timestamp_ms", s["timestamp_ms"] == ts_ms)
+        T.expect("SCT hash_alg = 4", s["hash_alg"] == 4)
+        T.expect("SCT sig_alg = 3", s["sig_alg"] == 3)
+
+    # 2. Битый SCT list → пустой результат
+    bad = der_octet(b"\x00\x05\x00\x02\x00")   # длина врёт
+    T.expect("SCT: битый list не крашит",
+             isinstance(_parse_sct_list(bad), list))
+
+    # 3. Cert без SCT
+    key = Ed25519Keys.generate()
+    cert = (CertificateBuilder()
+        .add_subject({"CN": "no-sct.example"})
+        .add_public_key(key)
+        .add_serial_random().add_validity(days=30)
+        .add_san_dns("no-sct.example")
+        .self_signed().sign(key))
+    T.expect("Cert без SCT: has_sct=False", cert.has_sct is False)
+    T.expect("Cert без SCT: sct_list=[]", cert.sct_list == [])
+
+
+def test_acme_persistence():
+    hr("21. ACME persistence (save/load)")
+
+    import tempfile, os
+    from x509kit import ACMEServer
+
+    # --- CA ---
+    ca_k = Ed25519Keys.generate()
+    ca = (CertificateBuilder(is_ca=True)
+        .add_subject({"CN": "Persistence CA"})
+        .add_public_key(ca_k)
+        .add_serial_random().add_validity(days=365)
+        .add_basic_constraints(path_len=0)
+        .add_key_usage("keyCertSign", "cRLSign")
+        .self_signed().sign(ca_k))
+
+    # --- Первый сервер: создаём аккаунт и order ---
+    srv1 = ACMEServer(ca, ca_k, "http://test.local:14000",
+                       auto_verify=True)
+    jwk = {"kty": "OKP", "crv": "Ed25519",
+           "x": __import__("x509kit").b64u(Ed25519Keys.generate().pub)}
+    kid, _ = srv1.new_account(jwk, {"termsOfServiceAgreed": True})
+    order = srv1.new_order(kid, {
+        "identifiers": [{"type": "dns", "value": "persist.example"}],
+    })
+
+    T.expect("srv1: account создан", len(srv1.accounts) == 1)
+    T.expect("srv1: order создан", len(srv1.orders) == 1)
+
+    # --- Сохранить ---
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+        state_path = tf.name
+    try:
+        srv1.save(state_path)
+        T.expect("save: файл создан", os.path.exists(state_path))
+
+        # --- Второй сервер: загружаем ---
+        srv2 = ACMEServer.load(ca, ca_k, state_path, auto_verify=True)
+        T.expect("load: base_url совпадает",
+                 srv2.base_url == srv1.base_url)
+        T.expect("load: account восстановлен",
+                 len(srv2.accounts) == 1)
+        T.expect("load: order восстановлен",
+                 len(srv2.orders) == 1)
+        T.expect("load: authz восстановлен",
+                 len(srv2.authzs) == len(srv1.authzs))
+        T.expect("load: challenges восстановлены",
+                 len(srv2.chals) == len(srv1.chals))
+
+        # kid должен быть тем же
+        kid2 = list(srv2.accounts.keys())[0]
+        T.expect("load: kid совпадает", kid2 == kid)
+
+        # Order view работает после загрузки
+        order_view = srv2.get_order(list(srv2.orders.keys())[0])
+        T.expect("load: get_order работает",
+                 order_view["status"] in ("pending", "ready"))
+
+        # Round-trip через to_dict/from_dict
+        srv3 = ACMEServer.from_dict(ca, ca_k, srv1.to_dict(),
+                                     auto_verify=True)
+        T.expect("to_dict/from_dict: accounts",
+                 len(srv3.accounts) == len(srv1.accounts))
+    finally:
+        try: os.unlink(state_path)
+        except OSError: pass
+
 def main():
     print("╔" + "═" * 70 + "╗")
     print("║  x509kit — полный прогон" + " " * 46 + "║")
@@ -1180,6 +1297,8 @@ def main():
         test_cert_from_url()
         test_cert_info()
         test_pkcs12_shortcuts()
+        test_sct_parsing()
+        test_acme_persistence()
     except Exception as e:
         print()
         print("\033[31m!!! Непойманное исключение:\033[0m", type(e).__name__, e)

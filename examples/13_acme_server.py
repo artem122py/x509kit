@@ -119,6 +119,13 @@ def make_handler(acme: ACMEServer):
                 jws = self._read_jws()
                 result = self._verify(jws, url)
                 self._dispatch(path, result)
+                # Autosave: сохранить состояние после каждой мутации
+                sp = getattr(self.server_ref, "_state_file", None)
+                if sp:
+                    try:
+                        self.server_ref.save(sp)
+                    except Exception as e:
+                        sys.stderr.write(f"[acme] save failed: {e}\n")
             except ACMEError as e:
                 self._problem(e)
             except Exception as e:
@@ -184,14 +191,29 @@ def main():
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--auto-verify", action="store_true",
                    help="challenge valid без реальной проверки (только для тестов!)")
+    p.add_argument("--state-file", default=None, metavar="PATH",
+                   help="сохранять состояние в JSON (переживает перезапуск)")
     args = p.parse_args()
 
     ca, ca_key = build_ca()
     base_url = f"http://{args.host}:{args.port}"
-    acme = ACMEServer(ca, ca_key, base_url,
-                      cert_days=90,
-                      auto_verify=args.auto_verify)
+    if args.state_file:
+        import os
+        if os.path.exists(os.path.expanduser(args.state_file)):
+            acme = ACMEServer.load(ca, ca_key, args.state_file,
+                                    auto_verify=args.auto_verify)
+            print(f"Loaded state: {args.state_file}")
+        else:
+            acme = ACMEServer(ca, ca_key, base_url,
+                              cert_days=90,
+                              auto_verify=args.auto_verify)
+            print(f"New state: {args.state_file} (will be created)")
+    else:
+        acme = ACMEServer(ca, ca_key, base_url,
+                          cert_days=90,
+                          auto_verify=args.auto_verify)
 
+    acme._state_file = args.state_file
     Handler = make_handler(acme)
     srv = HTTPServer((args.host, args.port), Handler)
 

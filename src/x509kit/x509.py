@@ -44,7 +44,7 @@ import socket
 import unicodedata
 import warnings as _warnings
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 
 # ======================================================================
@@ -337,6 +337,7 @@ OID_SUBJ_KEY_ID   = "2.5.29.14"
 OID_AUTH_KEY_ID   = "2.5.29.35"
 OID_EXT_REQUEST   = "1.2.840.113549.1.9.14"
 OID_NAME_CONSTR   = "2.5.29.30"
+OID_SCT           = "1.3.6.1.4.1.11129.2.4.2"   # Certificate Transparency
 OID_OCSP          = "1.3.6.1.5.5.7.48.1"
 OID_OCSP_BASIC    = "1.3.6.1.5.5.7.48.1.1"
 OID_OCSP_NONCE    = "1.3.6.1.5.5.7.48.1.2"
@@ -359,6 +360,7 @@ KNOWN_EXTENSION_OIDS = {
     OID_CRL_ISSUER, OID_INVALIDITY,
     OID_NAME_CONSTR,
     OID_AIA,
+    OID_SCT,
 }
 
 
@@ -2476,6 +2478,92 @@ def _parse_aia(data):
     return out
 
 
+# ---- Certificate Transparency (RFC 6962 §3.3) ----
+
+def _parse_sct(entry: bytes) -> dict:
+    """Разобрать один SignedCertificateTimestamp.
+
+    Формат (RFC 6962 §3.2):
+        version    1 byte  (v1 = 0)
+        log_id     32 bytes
+        timestamp  8 bytes  (millis since epoch)
+        ext_len    2 bytes  (обычно 0)
+        extensions ext_len bytes
+        signature  DigitallySigned (DER)
+    """
+    if len(entry) < 43:
+        raise X509ParseError(f"SCT: too short ({len(entry)} bytes)")
+    version = entry[0]
+    log_id = entry[1:33]
+    ts_ms = int.from_bytes(entry[33:41], "big")
+    ext_len = int.from_bytes(entry[41:43], "big")
+    if 43 + ext_len > len(entry):
+        raise X509ParseError("SCT: extensions truncated")
+    extensions = entry[43:43 + ext_len]
+    sig_pos = 43 + ext_len
+
+    sig_node, _ = ASN1.parse(entry, sig_pos)
+    if sig_node.tag != TAG_SEQUENCE or len(sig_node.children) != 3:
+        raise X509ParseError("SCT: bad DigitallySigned")
+    hash_alg = sig_node.children[0].as_int()
+    sig_alg = sig_node.children[1].as_int()
+    signature = sig_node.children[2].value
+
+    try:
+        dt = datetime.datetime.fromtimestamp(ts_ms / 1000,
+                                             tz=datetime.timezone.utc)
+        ts_iso = dt.isoformat()
+    except (ValueError, OSError):
+        ts_iso = None
+
+    return {
+        "version":       version,
+        "log_id":        log_id.hex(),
+        "timestamp_ms":  ts_ms,
+        "timestamp_iso": ts_iso,
+        "extensions":    extensions.hex(),
+        "hash_alg":      hash_alg,
+        "sig_alg":       sig_alg,
+        "signature":     signature.hex(),
+        "_signature_bytes": signature,
+    }
+
+
+def _parse_sct_list(extn_value: bytes) -> list:
+    """Разобрать содержимое CT-расширения.
+
+    extnValue — OCTET STRING (внешний). Внутри — DER OCTET STRING,
+    содержащий SignedCertificateTimestampList:
+        2 bytes total_len || (2 bytes sct_len || sct) × N
+    """
+    # Внешний extnValue содержит DER OCTET STRING
+    inner, _ = ASN1.parse(extn_value)
+    if inner.tag != TAG_OCTET_STRING:
+        raise X509ParseError("CT: extension is not OCTET STRING")
+    data = inner.value
+
+    if len(data) < 2:
+        return []
+    total = int.from_bytes(data[:2], "big")
+    if total != len(data) - 2:
+        total = len(data) - 2   # допускаем неточность у некоторых CA
+
+    rest = data[2:2 + total]
+    out = []
+    i = 0
+    while i + 2 <= len(rest):
+        sct_len = int.from_bytes(rest[i:i+2], "big")
+        i += 2
+        if i + sct_len > len(rest):
+            break
+        try:
+            out.append(_parse_sct(rest[i:i+sct_len]))
+        except X509ParseError:
+            pass
+        i += sct_len
+    return out
+
+
 def _parse_key_id(v, context):
     """Принимает bytes/hex-строку, возвращает bytes."""
     if isinstance(v, (bytes, bytearray)):
@@ -2646,6 +2734,28 @@ class Cert:
             return out
         except Exception:
             return []
+
+    @property
+    def sct_list(self):
+        """Embedded Signed Certificate Timestamps (RFC 6962 §3.3).
+
+        Возвращает список dict:
+            version, log_id (hex), timestamp_ms, timestamp_iso,
+            extensions (hex), hash_alg, sig_alg, signature (hex)
+        Пустой список — если расширения нет или оно битое.
+        """
+        ext = self.ext_get(OID_SCT)
+        if ext is None:
+            return []
+        try:
+            return _parse_sct_list(ext.value)
+        except Exception:
+            return []
+
+    @property
+    def has_sct(self) -> bool:
+        """True, если в сертификате есть embedded SCT."""
+        return len(self.sct_list) > 0
     @property
     def aki(self):
         """AuthorityKeyIdentifier keyIdentifier (bytes) или None."""
