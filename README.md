@@ -66,7 +66,7 @@ Not asking you to trust me — asking you to run this:
     git clone https://github.com/artem122py/x509kit
     cd x509kit
     pip install -e .
-    python test_live_ca.py
+    python flask/test_live_ca.py
 
 In one go, this script:
 
