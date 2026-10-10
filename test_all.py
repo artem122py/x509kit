@@ -1060,27 +1060,23 @@ def test_cert_info():
 
     info = cert.info()
 
-    checks = [
-        ("начинается с 'Certificate:'", info.startswith("Certificate:")),
-        ("есть 'Version: 3'",           "Version: 3" in info),
-        ("есть 'Serial Number:'",       "Serial Number:" in info),
-        ("есть 'Signature Algorithm:'", "Signature Algorithm:" in info),
-        ("есть 'Issuer:'",              "Issuer:" in info),
-        ("есть 'Validity'",             "Validity" in info),
-        ("есть 'Not Before'",           "Not Before:" in info),
-        ("есть 'Not After'",            "Not After :" in info),
-        ("есть 'Subject:'",             "Subject:" in info),
-        ("есть 'Subject Public Key Info:'",
-         "Subject Public Key Info:" in info),
-        ("есть 'Public Key Algorithm: ED25519'",
-         "Public Key Algorithm: ED25519" in info),
-        ("есть 'X509v3 extensions:'",   "X509v3 extensions:" in info),
-        ("есть 'X509v3 Subject Alternative Name'",
-         "X509v3 Subject Alternative Name" in info),
-        ("есть SAN содержимое",         "info.example" in info),
-    ]
-    for label, ok in checks:
-        T.expect(label, ok)
+    T.expect("начинается с 'Certificate:'", info.startswith("Certificate:"))
+    T.expect("есть 'Version: 3'",           "Version: 3" in info)
+    T.expect("есть 'Serial Number:'",       "Serial Number:" in info)
+    T.expect("есть 'Signature Algorithm:'", "Signature Algorithm:" in info)
+    T.expect("есть 'Issuer:'",              "Issuer:" in info)
+    T.expect("есть 'Validity'",             "Validity" in info)
+    T.expect("есть 'Not Before'",           "Not Before:" in info)
+    T.expect("есть 'Not After'",            "Not After :" in info)
+    T.expect("есть 'Subject:'",             "Subject:" in info)
+    T.expect("есть 'Subject Public Key Info:'",
+             "Subject Public Key Info:" in info)
+    T.expect("есть 'Public Key Algorithm: ED25519'",
+             "Public Key Algorithm: ED25519" in info)
+    T.expect("есть 'X509v3 extensions:'",   "X509v3 extensions:" in info)
+    T.expect("есть 'X509v3 Subject Alternative Name'",
+             "X509v3 Subject Alternative Name" in info)
+    T.expect("есть SAN содержимое",         "info.example" in info)
 
 
 def test_pkcs12_shortcuts():

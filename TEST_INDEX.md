@@ -1,10 +1,10 @@
 # Test Index
 
 Все проверки в `test_all.py`, сгруппированные по функциям.
-Негативные тесты (try/except) показаны один раз — только то,
-что должно произойти.
 
-## `test_rsa` (10)
+Скрипт-генератор: `python -m x509kit.tools.gen_test_index` (см. test_all.py).
+
+## `test_rsa` (11)
 
 - generate(2048) → 2048-битный
 - PKCS#1 v1.5 sign/verify
@@ -14,6 +14,7 @@
 - PSS sign/verify
 - PSS: tampered → False
 - private PEM round-trip
+- hash {…}
 - generate(1024) отвергается
 - e=3 отвергается
 
@@ -28,7 +29,7 @@
 - отказ при S >= L
 - отказ при битом R
 
-## `test_ecdsa` (7)
+## `test_ecdsa` (9)
 
 - RFC 6979: детерминизм
 - RFC 6979 'sample': r
@@ -37,6 +38,8 @@
 - RFC 6979 'test': s
 - P-256 n.bit_length == 256
 - P-521 n.bit_length == 521
+- {…}: sign/verify
+- {…}: tampered → False
 
 ## `test_aes` (9)
 
@@ -50,9 +53,13 @@
 - GCM round-trip с AAD
 - GCM: tampered tag → X509Error
 
-## `test_encrypted_keys` (2)
+## `test_encrypted_keys` (6)
 
 - plain RSA PEM (не шифрован)
+- RSA {…}: ENCRYPTED PRIVATE KEY
+- RSA {…}: round-trip
+- Ed25519 {…}: round-trip
+- ECDSA {…}: round-trip
 - GCM: неверный пароль → X509Error
 
 ## `test_chain` (18)
@@ -76,8 +83,9 @@
 - tampered leaf → False
 - tampered leaf: parse отказал
 
-## `test_mixed` (0)
+## `test_mixed` (1)
 
+- CA={…}: 4 leaf-типа
 
 ## `test_cryptography` (5)
 
@@ -87,10 +95,12 @@
 - наш RSA sign → их verify
 - наш Ed25519 sign → их verify
 
-## `test_ecdsa_cryptography` (0)
+## `test_ecdsa_cryptography` (2)
 
+- {…}: их sign → наш verify
+- {…}: наш sign → их verify
 
-## `test_name_constraints` (10)
+## `test_name_constraints` (11)
 
 - NC: расширение есть
 - NC: permitted dns
@@ -102,6 +112,7 @@
 - NC intersection: sub-CA разрешает больше → False
 - NC: IP вне subnet → X509Error
 - NC intersection: нарушение поймано при выпуске
+- NC: {…} → X509Error
 
 ## `test_crl` (9)
 
@@ -170,18 +181,20 @@
 - пустая строка → X509Error
 - нет '=' → X509Error
 
-## `test_cert_from_url` (5)
+## `test_cert_from_url` (6)
 
 - Cert.from_url определён
 - возвращает Cert
 - subject есть
 - SAN есть
 - пустой URL → X509Error
+- пустой URL → {…}
 
-## `test_cert_info` (0)
+## `test_cert_info` (1)
 
+- <label>
 
-## `test_pkcs12_shortcuts` (10)
+## `test_pkcs12_shortcuts` (11)
 
 - key.to_pkcs12 → PKCS12
 - to_pkcs12: MAC valid
@@ -192,8 +205,9 @@
 - bundle.to_pkcs12: MAC valid
 - bundle round-trip: cert matches
 - bundle round-trip: chain len=1
+- {…}: to_pkcs12 + MAC
 - пустой bundle → X509Error
 
 ---
 
-**Итого:** 19 функций, 133 проверок.
+**Итого:** 19 функций, 147 уникальных проверок.
