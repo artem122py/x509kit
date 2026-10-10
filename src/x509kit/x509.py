@@ -133,6 +133,29 @@ _MAX_PEM_SIZE = 10 * 1024 * 1024   # 10 MB (защита от DoS)
 _MAX_DER_SIZE = 50 * 1024 * 1024   # 50 MB (защита от DoS)
 
 
+def _safe_parse(func):
+    """Превращает TypeError/AttributeError/IndexError/ValueError/KeyError
+    в X509ParseError. Защищает парсеры от крашей на битых DER.
+
+    Применяется к __init__ парсеров. Гарантирует, что наружу
+    выходит только X509Error (или наследник).
+    """
+    import functools
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except X509Error:
+            raise
+        except (TypeError, AttributeError, IndexError, ValueError,
+                KeyError, UnicodeDecodeError, StopIteration) as e:
+            raise X509ParseError(
+                f"{func.__qualname__}: malformed DER: "
+                f"{type(e).__name__}: {e}"
+            ) from None
+    return wrapper
+
+
 class ASN1:
     __slots__ = ("tag", "value", "children", "raw")
 
@@ -470,6 +493,7 @@ def _encode_rdn(short_or_oid: str, value: str) -> bytes:
 class Name:
     __slots__ = ("rdns", "raw")
 
+    @_safe_parse
     def __init__(self, node: ASN1):
         self.raw = node.raw
         self.rdns = []
@@ -547,6 +571,7 @@ class Name:
 class AlgorithmIdentifier:
     __slots__ = ("oid", "params", "raw")
 
+    @_safe_parse
     def __init__(self, node):
         if not node.children:
             raise X509ParseError("AlgorithmIdentifier must have children")
@@ -1611,30 +1636,31 @@ KU_BITS = {
 
 
 def _parse_time(node):
-    s = node.value.decode("ascii")
-    if node.tag == TAG_UTC_TIME:
-        yy = int(s[0:2]); year = 2000 + yy if yy < 50 else 1900 + yy; p = 2
-    elif node.tag == TAG_GENERALIZED_TIME:
-        year = int(s[0:4]); p = 4
-    else:
-        raise X509ParseError(f"not a time tag: 0x{node.tag:02x}")
-    month  = int(s[p:p+2]); p += 2
-    day    = int(s[p:p+2]); p += 2
-    hour   = int(s[p:p+2]); p += 2
-    minute = int(s[p:p+2]); p += 2
-    second = 0
-    if p + 2 <= len(s) and s[p:p+2].isdigit():
-        second = int(s[p:p+2]); p += 2
-    tz = datetime.timedelta(0)
-    rest = s[p:]
-    if rest and rest[0] in "+-":
-        sign = 1 if rest[0] == "+" else -1
-        hh, mm = int(rest[1:3]), int(rest[3:5])
-        tz = sign * datetime.timedelta(hours=hh, minutes=mm)
-    return datetime.datetime(year, month, day, hour, minute, second,
-                             tzinfo=datetime.timezone(tz))
-
-
+    try:
+        s = node.value.decode("ascii")
+        if node.tag == TAG_UTC_TIME:
+            yy = int(s[0:2]); year = 2000 + yy if yy < 50 else 1900 + yy; p = 2
+        elif node.tag == TAG_GENERALIZED_TIME:
+            year = int(s[0:4]); p = 4
+        else:
+            raise X509ParseError(f"not a time tag: 0x{node.tag:02x}")
+        month  = int(s[p:p+2]); p += 2
+        day    = int(s[p:p+2]); p += 2
+        hour   = int(s[p:p+2]); p += 2
+        minute = int(s[p:p+2]); p += 2
+        second = 0
+        if p + 2 <= len(s) and s[p:p+2].isdigit():
+            second = int(s[p:p+2]); p += 2
+        tz = datetime.timedelta(0)
+        rest = s[p:]
+        if rest and rest[0] in "+-":
+            sign = 1 if rest[0] == "+" else -1
+            hh, mm = int(rest[1:3]), int(rest[3:5])
+            tz = sign * datetime.timedelta(hours=hh, minutes=mm)
+        return datetime.datetime(year, month, day, hour, minute, second,
+                                 tzinfo=datetime.timezone(tz))
+    except (ValueError, TypeError, UnicodeDecodeError, IndexError) as e:
+        raise X509ParseError(f"invalid time value: {e}") from None
 def _enc_time(dt):
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
@@ -1647,6 +1673,7 @@ def _enc_time(dt):
 class Validity:
     __slots__ = ("not_before", "not_after")
 
+    @_safe_parse
     def __init__(self, node):
         self.not_before = _parse_time(node.children[0])
         self.not_after = _parse_time(node.children[1])
@@ -1658,6 +1685,7 @@ class Validity:
 class Extension:
     __slots__ = ("oid", "critical", "value")
 
+    @_safe_parse
     def __init__(self, node):
         ch = node.children
         self.oid = ch[0].as_oid()
@@ -2347,6 +2375,7 @@ def _build_san_extension(entries):
 # ======================================================================
 
 class Cert:
+    @_safe_parse
     def __init__(self, data):
         if isinstance(data, str):
             data = data.encode("ascii")
@@ -2739,6 +2768,7 @@ def _build_cert_der(*, serial, hash_name, issuer_der, subject_der,
 class CACert(Cert):
     _signing_key = None
 
+    @_safe_parse
     def __init__(self, data):
         super().__init__(data)
         bc_ext = self.ext_get(OID_BASIC_CONSTR)
@@ -3039,6 +3069,7 @@ class CACert(Cert):
 # ======================================================================
 
 class CSR:
+    @_safe_parse
     def __init__(self, data):
         if isinstance(data, str): data = data.encode("ascii")
         if b"-----BEGIN" in data:
@@ -3421,6 +3452,7 @@ class CRLBuilder:
 class CRL:
     """X.509 Certificate Revocation List (v1/v2)."""
 
+    @_safe_parse
     def __init__(self, data):
         if isinstance(data, str):
             data = data.encode("ascii")
@@ -3638,6 +3670,7 @@ def _parse_extensions_sequence(node):
 class OCSPRequest:
     """OCSPRequest (RFC 6960 §4.1)."""
 
+    @_safe_parse
     def __init__(self, data):
         if isinstance(data, str):
             data = data.encode("ascii")
@@ -3747,6 +3780,7 @@ class OCSPRequest:
 class OCSPResponse:
     """OCSPResponse (RFC 6960 §4.2)."""
 
+    @_safe_parse
     def __init__(self, data):
         if isinstance(data, str):
             data = data.encode("ascii")
@@ -4313,6 +4347,7 @@ class PKCS12:
         assert pk.verify_mac("hunter2")
     """
 
+    @_safe_parse
     def __init__(self, key, cert, chain=None, password="",
                  name=None, iterations=2048, mac_iterations=2048):
         if not isinstance(cert, Cert):
