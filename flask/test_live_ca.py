@@ -18,6 +18,14 @@ test_live_ca.py — запускает микро-CA в фоне и прогон
 Запуск:      python test_live_ca.py
 """
 
+
+import sys as _sys
+if hasattr(_sys.stdout, "reconfigure"):
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import os
 import shutil
 import ssl

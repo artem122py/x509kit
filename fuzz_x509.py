@@ -18,6 +18,14 @@ fuzz_x509.py — fuzz-тест парсеров x509kit.
 Зависимости: только stdlib. Работает на любом Python 3.9+.
 """
 
+
+import sys as _sys
+if hasattr(_sys.stdout, "reconfigure"):
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import random
 import secrets
 import struct

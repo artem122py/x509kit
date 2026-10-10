@@ -23,6 +23,14 @@ test_all.py — единый прогон x509kit.
     python test_all.py
 """
 
+
+import sys as _sys
+if hasattr(_sys.stdout, "reconfigure"):
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import datetime
 import sys
 import traceback

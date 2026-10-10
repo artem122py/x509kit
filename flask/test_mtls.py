@@ -14,6 +14,14 @@ flask/test_mtls.py — Mutual TLS с x509kit + PKCS#12.
     python flask/test_mtls.py
 """
 
+
+import sys as _sys
+if hasattr(_sys.stdout, "reconfigure"):
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import os
 import shutil
 import socket

@@ -6,6 +6,14 @@ Requires: pip install cryptography
 
 Exit code 0 = all checks passed, 1 = something failed.
 """
+
+import sys as _sys
+if hasattr(_sys.stdout, "reconfigure"):
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import sys
 import datetime
 

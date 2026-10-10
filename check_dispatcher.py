@@ -7,6 +7,14 @@ check_dispatcher.py — показывает, где используется к
     python check_dispatcher.py
 """
 
+
+import sys as _sys
+if hasattr(_sys.stdout, "reconfigure"):
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import re
 from pathlib import Path
 
