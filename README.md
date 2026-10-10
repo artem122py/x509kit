@@ -1,5 +1,9 @@
 # x509kit
 
+![tests](https://github.com/artem122py/x509kit/actions/workflows/tests.yml/badge.svg)
+![python](https://img.shields.io/badge/python-3.9+-blue)
+![license](https://img.shields.io/badge/license-MIT-green)
+
 Pure-Python X.509 / PKCS#10 / CRL / OCSP / PKCS#12 toolkit.
 **Standard library only.**
 
