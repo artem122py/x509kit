@@ -36,6 +36,7 @@ import sys
 import traceback
 
 from x509kit import (
+    PKCS12,
     RSAKeys, Ed25519Keys, ECDSAKeys,
     Cert, CACert, CSR, CertBundle,
     CRL, CRLBuilder, CRL_REASONS,
@@ -986,6 +987,173 @@ def test_pem_roundtrip():
 #  Main
 # ======================================================================
 
+
+# ======================================================================
+#  16. Новые фичи: from_string, from_url, info, to_pkcs12
+# ======================================================================
+
+def test_name_from_string():
+    hr("16. Name.from_string (RFC 4514)")
+
+    n1 = Name.from_string("CN=example.com, O=MyOrg, C=XX")
+    n2 = Name.from_dict({"C": "XX", "O": "MyOrg", "CN": "example.com"})
+    T.expect("round-trip == from_dict", n1.raw == n2.raw,
+             f"\n      from_string: {n1}\n      from_dict:   {n2}")
+    T.expect("str содержит CN", "CN=example.com" in str(n1))
+
+    n3 = Name.from_string(str(n2))
+    T.expect("round-trip через str", n3.raw == n2.raw)
+
+    n4 = Name.from_string(r"CN=with\, comma, O=Org")
+    T.expect("escape запятой", n4.get("CN") == "with, comma",
+             f"got: {n4.get('CN')!r}")
+
+    n5 = Name.from_string(r"CN=with\\backslash")
+    T.expect("escape backslash", n5.get("CN") == r"with\backslash",
+             f"got: {n5.get('CN')!r}")
+
+    try:
+        Name.from_string("")
+        T.fail("пустая строка → X509Error", "не бросило")
+    except X509Error:
+        T.ok("пустая строка → X509Error")
+
+    try:
+        Name.from_string("no-equals-sign")
+        T.fail("нет '=' → X509Error", "не бросило")
+    except X509Error:
+        T.ok("нет '=' → X509Error")
+
+
+def test_cert_from_url():
+    hr("17. Cert.from_url")
+
+    T.expect("Cert.from_url определён", hasattr(Cert, "from_url"))
+
+    try:
+        cert = Cert.from_url("example.com", timeout=5)
+        T.expect("возвращает Cert", isinstance(cert, Cert))
+        T.expect("subject есть", cert.subject.get("CN") is not None)
+        T.expect("SAN есть", len(cert.san) > 0)
+    except Exception as e:
+        T.skip("Cert.from_url — нет сети", str(e)[:60])
+
+    try:
+        Cert.from_url("", timeout=2)
+        T.fail("пустой URL → X509Error", "не бросило")
+    except X509Error:
+        T.ok("пустой URL → X509Error")
+    except Exception as e:
+        T.ok(f"пустой URL → {type(e).__name__}")
+
+
+def test_cert_info():
+    hr("18. Cert.info() — openssl x509 -text style")
+
+    key = Ed25519Keys.generate()
+    cert = (CertificateBuilder()
+        .add_subject({"C": "XX", "O": "Info", "CN": "info.example"})
+        .add_public_key(key)
+        .add_serial_random().add_validity(days=30)
+        .add_san_dns("info.example")
+        .self_signed().sign(key))
+
+    info = cert.info()
+
+    checks = [
+        ("начинается с 'Certificate:'", info.startswith("Certificate:")),
+        ("есть 'Version: 3'",           "Version: 3" in info),
+        ("есть 'Serial Number:'",       "Serial Number:" in info),
+        ("есть 'Signature Algorithm:'", "Signature Algorithm:" in info),
+        ("есть 'Issuer:'",              "Issuer:" in info),
+        ("есть 'Validity'",             "Validity" in info),
+        ("есть 'Not Before'",           "Not Before:" in info),
+        ("есть 'Not After'",            "Not After :" in info),
+        ("есть 'Subject:'",             "Subject:" in info),
+        ("есть 'Subject Public Key Info:'",
+         "Subject Public Key Info:" in info),
+        ("есть 'Public Key Algorithm: ED25519'",
+         "Public Key Algorithm: ED25519" in info),
+        ("есть 'X509v3 extensions:'",   "X509v3 extensions:" in info),
+        ("есть 'X509v3 Subject Alternative Name'",
+         "X509v3 Subject Alternative Name" in info),
+        ("есть SAN содержимое",         "info.example" in info),
+    ]
+    for label, ok in checks:
+        T.expect(label, ok)
+
+
+def test_pkcs12_shortcuts():
+    hr("19. PKCS#12 шорткаты")
+
+    ca_key = Ed25519Keys.generate()
+    ca = (CertificateBuilder(is_ca=True)
+        .add_subject({"CN": "Shortcut CA"})
+        .add_public_key(ca_key)
+        .add_serial_random().add_validity(days=365)
+        .add_basic_constraints(path_len=0)
+        .add_key_usage("keyCertSign", "cRLSign")
+        .self_signed().sign(ca_key))
+
+    leaf_key = Ed25519Keys.generate()
+    leaf = (CertificateBuilder()
+        .add_subject({"CN": "shortcut.example"})
+        .add_issuer(ca).add_public_key(leaf_key)
+        .add_serial_random().add_validity(days=30)
+        .add_san_dns("shortcut.example")
+        .sign(ca_key))
+
+    # key.to_pkcs12
+    p12 = leaf_key.to_pkcs12(leaf, chain=[ca], password="hunter2",
+                             name="shortcut")
+    T.expect("key.to_pkcs12 → PKCS12", isinstance(p12, PKCS12))
+    T.expect("to_pkcs12: MAC valid", p12.verify_mac())
+    T.expect("to_pkcs12: chain ok", p12.verify_chain(trust_anchor=ca))
+
+    reloaded = PKCS12.load(p12.to_der(), password="hunter2")
+    T.expect("to_pkcs12 round-trip: key matches",
+             reloaded.key.pub == leaf_key.pub)
+    T.expect("to_pkcs12 round-trip: cert matches",
+             reloaded.cert.der == leaf.der)
+
+    # CertBundle.to_pkcs12
+    bundle = CertBundle([leaf, ca])
+    p12b = bundle.to_pkcs12(leaf_key, password="hunter2", name="bundle")
+    T.expect("bundle.to_pkcs12 → PKCS12", isinstance(p12b, PKCS12))
+    T.expect("bundle.to_pkcs12: MAC valid", p12b.verify_mac())
+
+    reloaded_b = PKCS12.load(p12b.to_der(), password="hunter2")
+    T.expect("bundle round-trip: cert matches",
+             reloaded_b.cert.der == leaf.der)
+    T.expect("bundle round-trip: chain len=1",
+             len(reloaded_b.chain) == 1)
+
+    # Все три типа ключей
+    for label, kf in [
+        ("RSA",     lambda: RSAKeys.generate(2048)),
+        ("Ed25519", lambda: Ed25519Keys.generate()),
+        ("EC-P256", lambda: ECDSAKeys.generate("P-256")),
+    ]:
+        try:
+            k = kf()
+            c = (CertificateBuilder()
+                .add_subject({"CN": f"{label}.shortcut"})
+                .add_public_key(k)
+                .add_serial_random().add_validity(days=30)
+                .self_signed().sign(k))
+            p = k.to_pkcs12(c, password="pw", name=label)
+            T.expect(f"{label}: to_pkcs12 + MAC", p.verify_mac())
+        except Exception as e:
+            T.fail(f"{label}: to_pkcs12", str(e)[:80])
+
+    # Пустой bundle
+    try:
+        CertBundle([]).to_pkcs12(leaf_key)
+        T.fail("пустой bundle → X509Error", "не бросило")
+    except X509Error:
+        T.ok("пустой bundle → X509Error")
+
+
 def main():
     print("╔" + "═" * 70 + "╗")
     print("║  x509kit — полный прогон" + " " * 46 + "║")
@@ -1012,6 +1180,10 @@ def main():
         test_aia()
         test_canonicalization()
         test_pem_roundtrip()
+        test_name_from_string()
+        test_cert_from_url()
+        test_cert_info()
+        test_pkcs12_shortcuts()
     except Exception as e:
         print()
         print("\033[31m!!! Непойманное исключение:\033[0m", type(e).__name__, e)

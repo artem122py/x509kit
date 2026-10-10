@@ -44,7 +44,7 @@ import socket
 import unicodedata
 import warnings as _warnings
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 
 # ======================================================================
@@ -361,6 +361,21 @@ KNOWN_EXTENSION_OIDS = {
     OID_AIA,
 }
 
+
+EXT_NAMES = {
+    "2.5.29.17":         "X509v3 Subject Alternative Name",
+    "2.5.29.19":         "X509v3 Basic Constraints",
+    "2.5.29.15":         "X509v3 Key Usage",
+    "2.5.29.37":         "X509v3 Extended Key Usage",
+    "2.5.29.30":         "X509v3 Name Constraints",
+    "2.5.29.14":         "X509v3 Subject Key Identifier",
+    "2.5.29.35":         "X509v3 Authority Key Identifier",
+    "2.5.29.31":         "X509v3 CRL Distribution Points",
+    "2.5.29.20":         "X509v3 CRL Number",
+    "2.5.29.21":         "X509v3 CRL Reason Code",
+    "1.3.6.1.5.5.7.1.1": "Authority Information Access",
+}
+
 # RFC 5280 §5.3.1 reason codes
 CRL_REASONS = {
     "unspecified":          0,
@@ -475,6 +490,20 @@ def _escape_dn(v: str) -> str:
     return "".join(out)
 
 
+def _unescape_dn(s: str) -> str:
+    """RFC 4514: убрать escape-последовательности в значении DN."""
+    out = []
+    i = 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            out.append(s[i + 1])
+            i += 2
+            continue
+        out.append(s[i])
+        i += 1
+    return "".join(out)
+
+
 def _encode_rdn(short_or_oid: str, value: str) -> bytes:
     oid = ATTR_OIDS.get(short_or_oid, short_or_oid)
     if not isinstance(value, str):
@@ -568,6 +597,72 @@ class Name:
 
     def __hash__(self):
         return hash(self.raw)
+
+    @classmethod
+    def from_string(cls, s):
+        r"""RFC 4514: разобрать строку DN в Name.
+
+        Порядок в строке — от конкретного к общему:
+            "CN=example.com, O=MyOrg, C=XX"
+
+        Эквивалентно Name.from_dict({"C": "XX", "O": "MyOrg", "CN": "example.com"}).
+
+        Поддерживает escape-последовательности:
+            CN=with\, comma, O=Org
+            CN=with\backslash
+        """
+        if not s or not s.strip():
+            raise X509ParseError("Name.from_string: empty string")
+
+        # Разбить по неэкранированным запятым
+        parts, cur, i = [], [], 0
+        while i < len(s):
+            c = s[i]
+            if c == "\\" and i + 1 < len(s):
+                cur.append(c)
+                cur.append(s[i + 1])
+                i += 2
+                continue
+            if c == ",":
+                parts.append("".join(cur))
+                cur = []
+                i += 1
+                continue
+            cur.append(c)
+            i += 1
+        if cur:
+            parts.append("".join(cur))
+
+        rdns = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            key_b, val_b, in_val, j = [], [], False, 0
+            while j < len(part):
+                c = part[j]
+                if c == "\\" and j + 1 < len(part):
+                    (val_b if in_val else key_b).append(c)
+                    (val_b if in_val else key_b).append(part[j + 1])
+                    j += 2
+                    continue
+                if c == "=" and not in_val:
+                    in_val = True
+                    j += 1
+                    continue
+                (val_b if in_val else key_b).append(c)
+                j += 1
+            if not in_val:
+                raise X509ParseError(f"Name.from_string: missing '=' in {part!r}")
+            k = "".join(key_b).strip()
+            v = _unescape_dn("".join(val_b).strip())
+            oid = ATTR_OIDS.get(k, k)
+            rdns.append((oid, v))
+
+        rdn_list = [_encode_rdn(oid, val) for oid, val in reversed(rdns)]
+        node, _ = ASN1.parse(der_seq(*rdn_list))
+        return cls(node)
+
 class AlgorithmIdentifier:
     __slots__ = ("oid", "params", "raw")
 
@@ -731,7 +826,6 @@ def _parse_pss_params(params_node):
         elif child.tag == 0xA2:                  # [2] saltLength
             salt_len = child.children[0].as_int()
     return (hash_name, salt_len)
-
 
 class RSAKeys:
     __slots__ = ("n", "e", "d", "p", "q", "dp", "dq", "qinv")
@@ -948,6 +1042,27 @@ class RSAKeys:
     def wipe(self):
         self.d = 0; self.p = 0; self.q = 0
         self.dp = 0; self.dq = 0; self.qinv = 0
+
+
+    def to_pkcs12(self, cert, chain=None, password="", name=None,
+                  iterations=2048, cipher="aes-256-cbc"):
+        """Упаковать этот ключ + сертификат (+цепочку) в PKCS#12.
+
+        Возвращает PKCS12. Для сохранения:
+            key.to_pkcs12(cert, chain=[ca]).save("client.p12")
+        """
+        b = PKCS12Builder()
+        b.set_key(self)
+        b.set_cert(cert)
+        if chain:
+            b.add_chain(*chain)
+        b.set_password(password)
+        if name:
+            b.set_name(name)
+        b.set_iterations(iterations)
+        if cipher != "aes-256-cbc":
+            b.set_cipher(cipher)
+        return b.build()
 
 
 # ======================================================================
@@ -1194,6 +1309,27 @@ class Ed25519Keys:
 
     def wipe(self):
         self.seed = None
+
+
+    def to_pkcs12(self, cert, chain=None, password="", name=None,
+                  iterations=2048, cipher="aes-256-cbc"):
+        """Упаковать этот ключ + сертификат (+цепочку) в PKCS#12.
+
+        Возвращает PKCS12. Для сохранения:
+            key.to_pkcs12(cert, chain=[ca]).save("client.p12")
+        """
+        b = PKCS12Builder()
+        b.set_key(self)
+        b.set_cert(cert)
+        if chain:
+            b.add_chain(*chain)
+        b.set_password(password)
+        if name:
+            b.set_name(name)
+        b.set_iterations(iterations)
+        if cipher != "aes-256-cbc":
+            b.set_cipher(cipher)
+        return b.build()
 
 
 # ======================================================================
@@ -1584,6 +1720,27 @@ class ECDSAKeys:
 
     def wipe(self):
         self.d = None
+
+
+    def to_pkcs12(self, cert, chain=None, password="", name=None,
+                  iterations=2048, cipher="aes-256-cbc"):
+        """Упаковать этот ключ + сертификат (+цепочку) в PKCS#12.
+
+        Возвращает PKCS12. Для сохранения:
+            key.to_pkcs12(cert, chain=[ca]).save("client.p12")
+        """
+        b = PKCS12Builder()
+        b.set_key(self)
+        b.set_cert(cert)
+        if chain:
+            b.add_chain(*chain)
+        b.set_password(password)
+        if name:
+            b.set_name(name)
+        b.set_iterations(iterations)
+        if cipher != "aes-256-cbc":
+            b.set_cipher(cipher)
+        return b.build()
 
 
 # ======================================================================
@@ -2661,6 +2818,114 @@ class Cert:
 
     def __hash__(self):
         return hash(self.der)
+
+
+    @classmethod
+    def from_url(cls, url, port=None, timeout=5, verify=False):
+        """Загрузить сертификат с HTTPS-сервера.
+
+        url — "https://example.com" или просто "example.com"
+        verify=False (default) — принять любой сертификат (для инспекции)
+        verify=True — упасть, если сертификат невалиден
+
+        Возвращает Cert.
+        """
+        import ssl as _ssl
+        from urllib.parse import urlparse
+
+        if "://" in url:
+            parsed = urlparse(url)
+            host = parsed.hostname
+            if port is None:
+                port = parsed.port or 443
+        else:
+            host = url
+            if port is None:
+                port = 443
+        if not host:
+            raise X509Error(f"Cert.from_url: cannot parse host from {url!r}")
+
+        if verify:
+            ctx = _ssl.create_default_context()
+        else:
+            ctx = _ssl._create_unverified_context()
+
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                der = ssock.getpeercert(binary_form=True)
+
+        return cls(der)
+
+    def info(self):
+        """Текстовое представление в стиле `openssl x509 -text`."""
+        def _fmt_time(dt):
+            return dt.strftime("%b %d %H:%M:%S %Y GMT")
+
+        lines = []
+        lines.append("Certificate:")
+        lines.append("    Data:")
+        lines.append(f"        Version: {self.version} (0x{self.version - 1:x})")
+        lines.append(f"        Serial Number: {self.serial} (0x{self.serial:x})")
+        lines.append(f"        Signature Algorithm: {self.signature_algorithm_name}")
+        lines.append(f"        Issuer: {self.issuer}")
+        lines.append( "        Validity")
+        lines.append(f"            Not Before: {_fmt_time(self.not_before)}")
+        lines.append(f"            Not After : {_fmt_time(self.not_after)}")
+        lines.append(f"        Subject: {self.subject}")
+
+        key = self.public_key
+        lines.append("        Subject Public Key Info:")
+        if isinstance(key, RSAKeys):
+            lines.append("            Public Key Algorithm: rsaEncryption")
+            lines.append(f"                Public-Key: ({key.size_bits} bit)")
+            h = key.n.to_bytes((key.n.bit_length() + 7) // 8, "big").hex()
+            lines.append("                Modulus:")
+            for i in range(0, len(h), 64):
+                lines.append(f"                    {h[i:i+64]}")
+            lines.append(f"                Exponent: {key.e} (0x{key.e:x})")
+        elif isinstance(key, Ed25519Keys):
+            lines.append("            Public Key Algorithm: ED25519")
+            lines.append("                ED25519 Public-Key:")
+            h = key.pub.hex()
+            for i in range(0, len(h), 64):
+                lines.append(f"                    {h[i:i+64]}")
+        elif isinstance(key, ECDSAKeys):
+            lines.append("            Public Key Algorithm: id-ecPublicKey")
+            lines.append(f"                ASN1 OID: {key.curve_oid}")
+            size = key.curve["size"]
+            x, y = key.point
+            xh = x.to_bytes(size, "big").hex()
+            yh = y.to_bytes(size, "big").hex()
+            lines.append("                pub:")
+            for i in range(0, len(xh), 64):
+                lines.append(f"                    {xh[i:i+64]}")
+            for i in range(0, len(yh), 64):
+                lines.append(f"                    {yh[i:i+64]}")
+        else:
+            lines.append(f"            Public Key Algorithm: {self.key_algorithm_oid}")
+
+        if self.extensions:
+            lines.append("        X509v3 extensions:")
+            for ext in self.extensions:
+                name = EXT_NAMES.get(ext.oid, ext.oid)
+                crit = " critical" if ext.critical else ""
+                lines.append(f"            {name}:{crit}")
+                v = ext.value
+                if v:
+                    hexed = v.hex()
+                    if len(hexed) > 64:
+                        lines.append(f"                {hexed[:64]}...")
+                    else:
+                        lines.append(f"                {hexed}")
+
+        lines.append(f"    Signature Algorithm: {self.signature_algorithm_name}")
+        sig_hex = self.signature.hex()
+        for i in range(0, len(sig_hex), 64):
+            lines.append(f"        {sig_hex[i:i+64]}")
+
+        return "\n".join(lines)
+
+
 def _sign_and_build_alg(key, data, hash_name="sha256", sig_scheme="pkcs1v15"):
     """Подписать `data` и вернуть (AlgorithmIdentifier DER, signature bytes)."""
     if not isinstance(key, (RSAKeys, Ed25519Keys, ECDSAKeys)):
@@ -3287,6 +3552,30 @@ class CertBundle:
     def __iter__(self):       return iter(self.certs)
     def __getitem__(self, i): return self.certs[i]
     def __repr__(self):       return f"<CertBundle {len(self.certs)} certs>"
+
+
+    def to_pkcs12(self, key, password="", name=None, iterations=2048,
+                  cipher="aes-256-cbc"):
+        """Собрать PKCS#12 из цепочки: certs[0] — leaf, остальные — chain.
+
+        key — приватный ключ leaf'а.
+        """
+        if not self.certs:
+            raise X509Error("CertBundle.to_pkcs12: empty bundle")
+        leaf = self.certs[0]
+        chain = self.certs[1:]
+        b = PKCS12Builder()
+        b.set_key(key)
+        b.set_cert(leaf)
+        if chain:
+            b.add_chain(*chain)
+        b.set_password(password)
+        if name:
+            b.set_name(name)
+        b.set_iterations(iterations)
+        if cipher != "aes-256-cbc":
+            b.set_cipher(cipher)
+        return b.build()
 
 
 # ======================================================================

@@ -25,6 +25,10 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     k.sign_pss(msg, "sha256")      / k.verify_pss(msg, sig, "sha256")
     k.size_bits / k.is_private / k.weak
 
+    # Шорткат на всех трёх типах ключей:
+    k.to_pkcs12(cert, chain=[ca], password="...", name="alice")
+        ^ возвращает PKCS12, можно .save("alice.p12")
+
     Ed25519Keys.generate() / Ed25519Keys(seed=bytes(32))
     Ed25519Keys.from_pem(pem, private=True, password="...")
     k.sign(msg) / k.verify(msg, sig) / k.pub
@@ -55,6 +59,10 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     c.weak_hash / c.has_unknown_critical
     c.verify_signature(issuer) / c.is_self_signed()
     c.to_pem() / c.to_der()
+    c.info()                            — вывод в стиле openssl x509 -text
+    Cert.from_url("https://example.com") — скачать и распарсить сертификат
+        ^ accepts "example.com" или "https://host:port"
+        ^ возвращает Cert
 
     CACert.create_self_signed(subject, keys, days=3650, path_len=None)
     CACert.from_cert(cert, signing_key=None)
@@ -171,6 +179,11 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     ASN1 — низкоуровневый DER-парсер (parse, as_int, as_oid, ...)
         ^ защита: _MAX_DER_SIZE = 50 MB, _MAX_DEPTH = 32
     canonicalize_name(name) / names_equal(a, b)   — RFC 4518
+
+    Name.from_string("CN=x, O=y, C=XX")           — RFC 4514 parser
+        ^ порядок "от конкретного к общему"
+        ^ поддерживает escape: "CN=with\\, comma, O=Org"
+    Name.from_dict({...})                          — из dict
     san_extension(dns_names=[], ips=[], emails=[], uris=[])
     validate_hostname(cert, "example.com")        — RFC 6125
     load_pem_certs / load_pem_csrs / load_pem_bundle / load_pem_crls
@@ -180,6 +193,8 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
 
     CertBundle([c1, c2, ...])
         .from_pem(data) / .from_file(path) / .to_pem() / .save(path)
+        .to_pkcs12(key, password="...", name="...")
+            ^ certs[0] — leaf, certs[1:] — chain; возвращает PKCS12
 
     EKU_OIDS — {serverAuth, clientAuth, codeSigning, emailProtection,
                 timeStamping, OCSPSigning, anyExtendedKeyUsage, ...}
