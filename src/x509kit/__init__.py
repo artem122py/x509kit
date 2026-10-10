@@ -266,6 +266,7 @@ from .x509 import (
     OID_EC_PUBLIC_KEY, OID_PRIME256V1,
     OID_SECP384R1, OID_SECP521R1, OID_SECP256K1,
     # Структуры
+    ASN1,
     Name, Cert, CACert, CSR, CertBundle,
     # PKCS#12
     PKCS12, PKCS12Builder,
@@ -295,6 +296,7 @@ from .x509 import (
 )
 
 __all__ = [
+    "ASN1",
     # Ключи
     "RSAKeys", "Ed25519Keys", "ECDSAKeys", "EC_CURVES",
     "OID_EC_PUBLIC_KEY", "OID_PRIME256V1",
