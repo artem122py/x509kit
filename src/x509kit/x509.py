@@ -130,6 +130,7 @@ TAG_SET              = 0x31
 
 _MAX_DEPTH = 32
 _MAX_PEM_SIZE = 10 * 1024 * 1024   # 10 MB (защита от DoS)
+_MAX_DER_SIZE = 50 * 1024 * 1024   # 50 MB (защита от DoS)
 
 
 class ASN1:
@@ -141,6 +142,11 @@ class ASN1:
 
     @classmethod
     def parse(cls, data, offset=0, _depth=0):
+        if len(data) > _MAX_DER_SIZE:
+            raise X509ParseError(
+                f"DER input too large: {len(data)} bytes "
+                f"(limit {_MAX_DER_SIZE})"
+            )
         if _depth > _MAX_DEPTH:
             raise X509ParseError("DER nesting too deep")
         start = offset
@@ -2410,11 +2416,50 @@ class Cert:
         ext = self.ext_get(OID_SAN)
         return _parse_san(ext.value) if ext else []
 
-    @property
-    def ski(self):
-        """SubjectKeyIdentifier (bytes) или None."""
-        return _extract_ski(self)
 
+
+
+
+    @property
+    def dns_names(self):
+        """Список dNSName из SAN."""
+        return [v for kind, v in self.san if kind == "dNSName"]
+
+    @property
+    def ip_addresses(self):
+        """Список iPAddress из SAN (уже как строки)."""
+        return [v for kind, v in self.san if kind == "iPAddress"]
+
+    @property
+    def emails(self):
+        """Список rfc822Name из SAN."""
+        return [v for kind, v in self.san if kind == "rfc822Name"]
+
+    @property
+    def uris(self):
+        """Список URI из SAN."""
+        return [v for kind, v in self.san if kind == "URI"]
+
+    @property
+    def crl_distribution_points(self):
+        """Список URL из CRL Distribution Points."""
+        ext = self.ext_get(OID_CRL_DP)
+        if ext is None:
+            return []
+        try:
+            node, _ = ASN1.parse(ext.value)
+            out = []
+            for dp in node.children:
+                for sub in dp.children:
+                    if sub.tag == 0xA0:
+                        for name in sub.children:
+                            if name.tag == 0xA0:
+                                for uri in name.children:
+                                    if uri.tag == 0x86:
+                                        out.append(uri.value.decode("ascii", "replace"))
+            return out
+        except Exception:
+            return []
     @property
     def aki(self):
         """AuthorityKeyIdentifier keyIdentifier (bytes) или None."""
@@ -3052,6 +3097,32 @@ class CSR:
                 return _parse_san(e.value)
         return []
 
+
+
+
+
+
+
+
+    @property
+    def dns_names(self):
+        """Список dNSName из SAN в CSR."""
+        return [v for kind, v in self.san if kind == "dNSName"]
+
+    @property
+    def ip_addresses(self):
+        """Список iPAddress из SAN в CSR."""
+        return [v for kind, v in self.san if kind == "iPAddress"]
+
+    @property
+    def emails(self):
+        """Список rfc822Name из SAN в CSR."""
+        return [v for kind, v in self.san if kind == "rfc822Name"]
+
+    @property
+    def uris(self):
+        """Список URI из SAN в CSR."""
+        return [v for kind, v in self.san if kind == "URI"]
     @property
     def eku(self):
         """Extended Key Usage из CSR (set имён или OID). Пусто, если нет."""
