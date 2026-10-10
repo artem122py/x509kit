@@ -14,6 +14,7 @@ functionally correct — not that it is safe for adversarial environments.
 ## What is covered
 
 - ASN.1 DER parser and encoder (strict, minimal-length, depth-limited)
+  with size limits: DER 512 KB, PEM 1 MB, depth 32
 - RSA PKCS#1 v1.5 and RSASSA-PSS (with blinding and CRT)
 - Ed25519 (RFC 8032)
 - ECDSA (P-256, P-384, P-521, secp256k1) with RFC 6979 deterministic nonces
@@ -46,6 +47,21 @@ Use OpenSSL for anything exposed to a remote attacker.
 
 fuzz_x509.py exists and runs, but is not part of CI. Parsers handle
 random bytes without crashing, but the corpus is not exhaustive.
+
+### Limited DoS protection
+
+The library rejects oversized DER (512 KB), PEM (1 MB), and deeply
+nested ASN.1 (depth 32). It does **not** protect against:
+
+- CPU exhaustion: Ed25519 sign+verify in pure Python is ~30 ops/sec;
+  an attacker can slow down a service by requesting many signatures.
+- Memory exhaustion from many small objects: each parsed certificate
+  allocates memory; parse rate is ~10,000 certs/sec on a modern CPU.
+- Algorithmic complexity: DER parsing is O(n) in input size, but
+  cryptographic verification is O(bit_length³) for RSA.
+
+If you accept untrusted certificates, add rate limiting at the
+application level. The library cannot do this for you.
 
 ### Not independently audited
 
@@ -120,8 +136,11 @@ If you decide to use this library for anything beyond learning:
    disagree with us, we are wrong.
 
 2. Bound your inputs. When accepting certificates, CSRs, or PKCS#12
-   files from outside, enforce size limits (the library enforces 10 MB
-   on PEM input by default; add your own on top).
+   files from outside, enforce size limits. The library defaults are:
+   DER 512 KB, PEM 1 MB, nesting depth 32. Real X.509 certificates
+   are under 50 KB, so these give 10x headroom. If your context
+   allows stricter limits, set them — you can monkey-patch
+   `x509kit.x509._MAX_DER_SIZE` before parsing untrusted data.
 
 3. Do not use for long-lived private keys under load. RSA at 10,000
    signatures/hour in pure Python — use OpenSSL instead.
