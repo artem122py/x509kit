@@ -25,6 +25,7 @@ dependencies, prints what it does, and can be run directly:
 | 14 | `14_acme_client.py`          | ACME client (run while 13 is running) |
 | 15 | `15_ct_sct.py`               | Parse embedded SCT from a real cert |
 | 16 | `16_revocation.py`           | Full revocation stack: CRL + OCSP over HTTP |
+| 17 | `17_cms_sign.py`             | CMS SignedData (RFC 5652): sign / verify / detached |
 
 ## Recommended order
 

@@ -25,6 +25,8 @@ test_all.py — единый прогон x509kit.
  20.  Certificate Transparency (SCT)
  21.  ACME persistence (save/load)
  22.  Network revocation (CRL/OCSP HTTP)
+ 23.  CMS (RFC 5652) parsing
+ 24.  CMS (RFC 5652) sign / verify
 
 Запуск:
     python test_all.py
@@ -58,7 +60,10 @@ from x509kit.x509 import (
     _aes256_cbc_encrypt, _aes256_cbc_decrypt,
     _aes256_gcm_encrypt, _aes256_gcm_decrypt,
     _parse_ecdsa_sig,
+    der_seq, der_set, der_octet, der_int, der_null, der_bitstring,
+    _der_tlv, encode_oid, TAG_SET, TAG_OCTET_STRING,
 )
+from x509kit.cms import CMSSignedData, cms_sign, cms_load
 
 
 # ======================================================================
@@ -1377,6 +1382,231 @@ def test_revocation_network():
     finally:
         srv.shutdown()
 
+def _build_minimal_cms():
+    """Собрать минимальный CMS SignedData без signing — только для парсинга."""
+    OID_SIGNED = "1.2.840.113549.1.7.2"
+    OID_DATA   = "1.2.840.113549.1.7.1"
+    OID_SHA256 = "2.16.840.1.101.3.4.2.1"
+    OID_RSA_SHA256 = "1.2.840.113549.1.1.11"
+
+    sha256_alg = der_seq(encode_oid(OID_SHA256), der_null())
+    content = b"hello, cms!"
+    eci = der_seq(
+        encode_oid(OID_DATA),
+        _der_tlv(0xA0, der_octet(content)),
+    )
+    empty_name = der_seq()
+    ias = der_seq(empty_name, der_int(0x1234))
+    sig_alg = der_seq(encode_oid(OID_RSA_SHA256), der_null())
+    signer = der_seq(
+        der_int(1),
+        ias,
+        sha256_alg,
+        sig_alg,
+        der_octet(b"\x00" * 32),   # RFC 5652 §5.3: signature OCTET STRING
+    )
+    signed_data = der_seq(
+        der_int(1),
+        der_set(sha256_alg),
+        eci,
+        der_set(signer),
+    )
+    return der_seq(
+        encode_oid(OID_SIGNED),
+        _der_tlv(0xA0, signed_data),
+    )
+
+
+def test_cms_parsing():
+    hr("23. CMS (RFC 5652) parsing")
+
+    der = _build_minimal_cms()
+    sd = CMSSignedData.load(der)
+    T.expect("CMS: version = 1", sd.version == 1)
+    T.expect("CMS: content_type = data",
+             sd.content_type == "1.2.840.113549.1.7.1")
+    T.expect("CMS: attached content", not sd.detached)
+    T.expect("CMS: content bytes", sd.content == b"hello, cms!")
+    T.expect("CMS: 1 signer", len(sd.signers) == 1)
+    T.expect("CMS: 0 certificates", len(sd.certificates) == 0)
+
+    s = sd.signers[0]
+    T.expect("Signer: sid = issuer_and_serial",
+             s.sid_kind == "issuer_and_serial")
+    T.expect("Signer: serial", s.serial == 0x1234)
+    T.expect("Signer: digest name = sha256",
+             s.digest_algorithm.name == "sha256")
+    T.expect("Signer: sig name = sha256WithRSA",
+             s.signature_algorithm.name == "sha256WithRSA")
+    T.expect("Signer: signature bytes = 32",
+             len(s.signature) == 32)
+
+    # PEM round-trip
+    pem = sd.to_pem()
+    sd2 = CMSSignedData.load(pem)
+    T.expect("CMS: PEM round-trip content", sd2.content == sd.content)
+    T.expect("CMS: PEM round-trip version", sd2.version == sd.version)
+    T.expect("CMS: DER round-trip",
+             CMSSignedData.load(sd.to_der()).signer_count == 1)
+
+    # cms_load alias
+    sd3 = cms_load(der)
+    T.expect("cms_load alias", sd3.signers[0].serial == 0x1234)
+
+    # get_cert_for_signer — нет сертов → None
+    T.expect("get_cert_for_signer: no certs → None",
+             sd.get_cert_for_signer(s) is None)
+
+    # Detached
+    detached_der = _build_minimal_cms_detached()
+    sdd = CMSSignedData.load(detached_der)
+    T.expect("CMS detached: content is None", sdd.content is None)
+    T.expect("CMS detached: detached flag", sdd.detached)
+
+
+def _build_minimal_cms_detached():
+    """Тот же CMS, но без eContent — detached."""
+    OID_SIGNED = "1.2.840.113549.1.7.2"
+    OID_DATA   = "1.2.840.113549.1.7.1"
+    OID_SHA256 = "2.16.840.1.101.3.4.2.1"
+    OID_RSA_SHA256 = "1.2.840.113549.1.1.11"
+
+    sha256_alg = der_seq(encode_oid(OID_SHA256), der_null())
+    eci = der_seq(encode_oid(OID_DATA))   # без eContent
+    empty_name = der_seq()
+    ias = der_seq(empty_name, der_int(0x5555))
+    sig_alg = der_seq(encode_oid(OID_RSA_SHA256), der_null())
+    signer = der_seq(
+        der_int(1), ias, sha256_alg, sig_alg,
+        der_octet(b"\x00" * 32),
+    )
+    signed_data = der_seq(
+        der_int(1), der_set(sha256_alg), eci, der_set(signer),
+    )
+    return der_seq(encode_oid(OID_SIGNED), _der_tlv(0xA0, signed_data))
+
+
+def test_cms_sign_verify():
+    hr("24. CMS (RFC 5652) sign / verify")
+
+    # CA
+    ca_key = Ed25519Keys.generate()
+    ca = (CertificateBuilder(is_ca=True)
+        .add_subject({"CN": "CMS Test CA"})
+        .add_public_key(ca_key)
+        .add_serial_random().add_validity(days=365)
+        .add_basic_constraints(path_len=0)
+        .add_key_usage("keyCertSign", "cRLSign")
+        .self_signed().sign(ca_key))
+
+    content = b"hello, cms!"
+
+    for label, key_f in (
+        ("RSA-2048", lambda: RSAKeys.generate(2048)),
+        ("Ed25519",  lambda: Ed25519Keys.generate()),
+        ("EC-P256",  lambda: ECDSAKeys.generate("P-256")),
+    ):
+        k = key_f()
+        leaf = (CertificateBuilder()
+            .add_subject({"CN": f"{label}.cms"})
+            .add_issuer(ca).add_public_key(k)
+            .add_serial_random().add_validity(days=90)
+            .add_san_dns(f"{label}.cms")
+            .sign(ca_key))
+
+        # --- Attached ---
+        sd = cms_sign(content, key=k, cert=leaf, chain=[ca])
+        sd2 = CMSSignedData.load(sd.to_der())
+        T.expect(f"{label}: attached parsed", sd2.signer_count == 1)
+        T.expect(f"{label}: attached content round-trip",
+                 sd2.content == content)
+        T.expect(f"{label}: attached certs embedded (leaf+ca)",
+                 len(sd2.certificates) == 2)
+        T.expect(f"{label}: verify attached",
+                 sd2.verify())
+        T.expect(f"{label}: verify(trust_anchor=ca)",
+                 sd2.verify(trust_anchor=ca))
+
+        # signing_time по умолчанию есть
+        T.expect(f"{label}: signingTime attribute present",
+                 sd2.signers[0].signing_time is not None)
+
+        # message_digest attribute present
+        T.expect(f"{label}: messageDigest attribute present",
+                 sd2.signers[0].message_digest is not None)
+
+        # content_type attribute
+        T.expect(f"{label}: contentType attribute == data",
+                 sd2.signers[0].content_type_attr
+                 == "1.2.840.113549.1.7.1")
+
+        # get_cert_for_signer
+        found = sd2.get_cert_for_signer(sd2.signers[0])
+        T.expect(f"{label}: get_cert_for_signer finds leaf",
+                 found is not None and found.der == leaf.der)
+
+        # --- Detached ---
+        sd_det = cms_sign(content, key=k, cert=leaf, chain=[ca],
+                           detached=True)
+        sd_det2 = CMSSignedData.load(sd_det.to_der())
+        T.expect(f"{label}: detached content is None",
+                 sd_det2.content is None)
+        T.expect(f"{label}: detached flag", sd_det2.detached)
+        T.expect(f"{label}: detached verify without data → False",
+                 not sd_det2.verify())
+        T.expect(f"{label}: detached verify with correct data",
+                 sd_det2.verify(detached_data=content, trust_anchor=ca))
+        T.expect(f"{label}: detached verify tampered data → False",
+                 not sd_det2.verify(detached_data=b"wrong"))
+
+        # --- Wrong trust anchor ---
+        other_ca_key = Ed25519Keys.generate()
+        other_ca = (CertificateBuilder(is_ca=True)
+            .add_subject({"CN": "Other CA"})
+            .add_public_key(other_ca_key)
+            .add_serial_random().add_validity(days=365)
+            .add_basic_constraints(path_len=0)
+            .add_key_usage("keyCertSign", "cRLSign")
+            .self_signed().sign(other_ca_key))
+        T.expect(f"{label}: verify(wrong anchor) → False",
+                 not sd2.verify(trust_anchor=other_ca))
+
+        # --- PEM round-trip ---
+        sd_pem = CMSSignedData.load(sd2.to_pem())
+        T.expect(f"{label}: PEM round-trip content",
+                 sd_pem.content == content)
+
+    # --- add_signing_time=False ---
+    nosig_key = Ed25519Keys.generate()
+    nosig_cert = (CertificateBuilder()
+        .add_subject({"CN": "nosig.cms"})
+        .add_issuer(ca)
+        .add_public_key(nosig_key)
+        .add_serial_random().add_validity(days=90)
+        .add_san_dns("nosig.cms")
+        .sign(ca_key))
+    sd_nosig = cms_sign(content, key=nosig_key, cert=nosig_cert,
+                         chain=[ca], add_signing_time=False)
+    T.expect("cms_sign add_signing_time=False: signing_time is None",
+             sd_nosig.signers[0].signing_time is None)
+    T.expect("cms_sign add_signing_time=False: verify ok",
+             CMSSignedData.load(sd_nosig.to_der()).verify(trust_anchor=ca))
+
+    # --- Отвергаем key/cert mismatch ---
+    k1 = Ed25519Keys.generate()
+    k2 = Ed25519Keys.generate()
+    leaf2 = (CertificateBuilder()
+        .add_subject({"CN": "mismatch.cms"})
+        .add_issuer(ca).add_public_key(k1)
+        .add_serial_random().add_validity(days=90)
+        .sign(ca_key))
+    try:
+        cms_sign(content, key=k2, cert=leaf2, chain=[ca])
+        T.fail("cms_sign: key != cert → X509Error", "не бросило")
+    except X509Error:
+        T.ok("cms_sign: key != cert → X509Error")
+
+
 def main():
     print("╔" + "═" * 70 + "╗")
     print("║  x509kit — полный прогон" + " " * 46 + "║")
@@ -1410,6 +1640,8 @@ def main():
         test_sct_parsing()
         test_acme_persistence()
         test_revocation_network()
+        test_cms_parsing()
+        test_cms_sign_verify()
     except Exception as e:
         print()
         print("\033[31m!!! Непойманное исключение:\033[0m", type(e).__name__, e)

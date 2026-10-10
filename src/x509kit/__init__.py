@@ -339,6 +339,71 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     run_in_thread(srv) — обёртка над threading.Thread(daemon=True)
 
 ═══════════════════════════════════════════════════════════════════════
+  CMS SignedData (RFC 5652) — parse / sign / verify
+═══════════════════════════════════════════════════════════════════════
+
+    from x509kit import cms_sign, CMSSignedData
+
+    # Attached (content внутри .p7s)
+    sd = cms_sign(b"hello", key=signing_key, cert=signing_cert,
+                   chain=[ca])
+    sd.save("message.p7s")
+    assert sd.verify(trust_anchor=ca)
+
+    # Detached (content отдельно)
+    sd = cms_sign(b"hello", key=signing_key, cert=signing_cert,
+                   detached=True)
+    sd.save("message.p7s.sig")
+    sd2 = CMSSignedData.load("message.p7s.sig")
+    assert sd2.verify(detached_data=b"hello", trust_anchor=ca)
+
+    # Параметры cms_sign:
+    #   detached=False             — content в контейнере
+    #   digest='sha256'            — 'sha256'|'sha384'|'sha512'
+    #                                (для Ed25519 игнорируется, SHA-512)
+    #   sig_scheme='pkcs1v15'      — 'pkcs1v15'|'pss' (только RSA)
+    #   signing_time=None          — datetime.now(UTC) по умолчанию
+    #   add_signing_time=True      — включать ли signed-атрибут signingTime
+
+    # Загрузка и парсинг
+    sd = CMSSignedData.load("message.p7s")
+    sd.version / sd.content_type / sd.content / sd.detached
+    sd.digest_algorithms / sd.certificates / sd.crls / sd.signers
+
+    # Поля SignerInfo
+    for s in sd.signers:
+        s.sid_kind          — 'issuer_and_serial' | 'subject_key_id'
+        s.issuer / s.serial — для IssuerAndSerialNumber
+        s.subject_key_id    — для SubjectKeyIdentifier
+        s.digest_algorithm.name
+        s.signature_algorithm.name
+        s.signature         — bytes
+        s.signing_time      — datetime или None
+        s.message_digest    — bytes или None
+        s.content_type_attr — OID или None
+        s.signed_attrs      — dict {oid: [DER value, ...]}
+
+    # Verify
+    sd.verify()                                    — подпись + messageDigest
+    sd.verify(trust_anchor=ca)                     — плюс цепочка
+    sd.verify(detached_data=b"hello")              — для detached
+    sd.verify(allow_weak_hash=False)               — запрет SHA-1
+
+    # Утилиты
+    sd.get_cert_for_signer(s) — Cert подписанта из sd.certificates
+    sd.to_der() / sd.to_pem() / sd.save(path)
+    cms_load(path_or_der_or_pem) — алиас CMSSignedData.load
+
+    # OID-константы
+    OID_PKCS7_SIGNED / OID_PKCS7_DATA / OID_PKCS7_ENVELOPED
+    OID_PKCS9_CONTENT_TYPE / OID_PKCS9_MESSAGE_DIGEST / OID_PKCS9_SIGNING_TIME
+    CMS_CONTENT_TYPE_NAMES / CMS_SIGNED_ATTR_NAMES
+
+    НЕ реализовано: EnvelopedData / DigestedData / EncryptedData /
+    AuthenticatedData, CAdES-BES/LT/LTA, timestamping, external TSA.
+    Проверено с OpenSSL CLI (openssl cms -sign / -verify).
+
+═══════════════════════════════════════════════════════════════════════
   Исключения и предупреждения
 ═══════════════════════════════════════════════════════════════════════
 
@@ -427,9 +492,24 @@ from .revocation import (
     RevocationHTTPServer, run_in_thread,
 )
 
+from .cms import (
+    CMSSignedData, CMSSignerInfo, cms_sign, cms_load,
+    OID_PKCS7_SIGNED,
+    OID_PKCS9_CONTENT_TYPE, OID_PKCS9_MESSAGE_DIGEST,
+    OID_PKCS9_SIGNING_TIME,
+    CONTENT_TYPE_NAMES as CMS_CONTENT_TYPE_NAMES,
+    SIGNED_ATTR_NAMES as CMS_SIGNED_ATTR_NAMES,
+)
+
 __all__ = [
     "make_revocation_server", "make_revocation_handler",
     "RevocationHTTPServer", "run_in_thread",
+    # CMS (RFC 5652)
+    "CMSSignedData", "CMSSignerInfo", "cms_sign", "cms_load",
+    "OID_PKCS7_SIGNED",
+    "OID_PKCS9_CONTENT_TYPE", "OID_PKCS9_MESSAGE_DIGEST",
+    "OID_PKCS9_SIGNING_TIME",
+    "CMS_CONTENT_TYPE_NAMES", "CMS_SIGNED_ATTR_NAMES",
     "ACMEServer", "ACMEError",
     "b64u", "b64u_decode",
     "jwk_to_key", "jwk_thumbprint", "verify_jws",

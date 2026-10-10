@@ -24,6 +24,11 @@ functionally correct — not that it is safe for adversarial environments.
 - CRL (RFC 5280) and OCSP (RFC 6960)
 - PKCS#12 (RFC 7292) container format
 - PKCS#8 EncryptedPrivateKeyInfo (PBES2 + PBKDF2 + AES-256-CBC/GCM)
+- CMS (RFC 5652) SignedData — parsing, signing, verification
+  (`x509kit.cms`): ContentInfo, SignerInfo, signed attributes,
+  embedded certificates and CRLs, `cms_sign()` for RSA / Ed25519 /
+  ECDSA, `CMSSignedData.verify()` for signature + messageDigest +
+  optional chain to a trust anchor. Verified against OpenSSL CLI.
 - RFC 4518 DN canonicalization
 - RFC 6125 hostname validation
 
@@ -69,6 +74,19 @@ The code has been cross-verified against cryptography and OpenSSL 3.6.5,
 which means it produces compatible output. This is not the same as a
 security audit. No third party has reviewed the code for logic errors,
 side channels, or attack surface.
+
+### CMS limitations
+
+`x509kit.cms` verifies signatures, messageDigest, and (optionally) a
+certificate chain to a caller-supplied trust anchor. It does **not**
+implement: EnvelopedData / DigestedData / EncryptedData /
+AuthenticatedData, CAdES-BES/LT/LTA, RFC 3161 timestamping, external
+TSA, or countersignature handling. It also does not implement CRL/OCSP
+checking during verification — pass `trust_anchor` and validate
+revocation yourself.
+
+Signing uses one signer per `cms_sign()` call. Multi-signer CMS is
+parsed correctly but not produced by this API.
 
 ### No formal PKI validation
 

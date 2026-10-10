@@ -178,7 +178,7 @@ Requires: `pip install cryptography`
 
 ## Examples
 
-See [`examples/`](examples/) — 16 runnable scripts covering the whole
+See [`examples/`](examples/) — 17 runnable scripts covering the whole
 library:
 
 - `01_root_ca.py` — self-signed CA
@@ -197,6 +197,7 @@ library:
 - `14_acme_client.py` — ACME client (run while 13 is running)
 - `15_ct_sct.py` — parse embedded SCT from a real cert
 - `16_revocation.py` — full CRL+OCSP stack over HTTP
+- `17_cms_sign.py` — CMS SignedData: sign / verify / detached
 
 Each is self-contained, prints what it does, and shows the OpenSSL
 command to verify the result.
@@ -264,13 +265,16 @@ with: this is for you.
   `Cert.fetch_ocsp`, `Cert.fetch_issuer` (AIA chasing),
   `CertBundle.sort_chain`
 - HTTP server for CRL/OCSP (`x509kit.revocation`)
+- CMS (RFC 5652) SignedData — parsing, signing, verification:
+  `cms_sign()`, `CMSSignedData.verify()`, attached / detached content,
+  SignerInfo, signed attributes, embedded certificates and CRLs
 - Fluent builders: CertificateBuilder, CSRBuilder, CRLBuilder,
   OCSPResponseBuilder, PKCS12Builder
 - X509Error with fix hints, X509Warning for non-fatal issues
 
 ## Status
 
-Alpha (0.6.0). Educational. Not for production. See
+Alpha (0.7.0). Educational. Not for production. See
 [SECURITY.md](SECURITY.md).
 
 ## License

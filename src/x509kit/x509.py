@@ -678,7 +678,29 @@ class AlgorithmIdentifier:
 
     @property
     def name(self):
-        return SIG_ALG_NAMES.get(self.oid, self.oid)
+        """Читаемое имя алгоритма.
+
+        Порядок поиска:
+          1. SIG_ALG_NAMES — алгоритмы подписи (sha256WithRSA, Ed25519, ...)
+          2. _HASH_OIDS_REV — чистые хэши (sha256, sha384, sha512) —
+             используется в CMS digestAlgorithms
+          3. сам OID
+        """
+        if self.oid in SIG_ALG_NAMES:
+            return SIG_ALG_NAMES[self.oid]
+        if self.oid in _HASH_OIDS_REV:
+            return _HASH_OIDS_REV[self.oid]
+        return self.oid
+
+    @property
+    def digest_name(self):
+        """Имя хэша (sha256/sha384/sha512) или None, если OID не хэш.
+
+        Пример (CMS):
+            sd.digest_algorithms[0].digest_name  # 'sha256'
+            sd.digest_algorithms[0].name         # 'sha256' (то же самое)
+        """
+        return _HASH_OIDS_REV.get(self.oid)
 
     def __repr__(self):
         return f"<AlgId {self.oid}>"

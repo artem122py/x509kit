@@ -6,8 +6,28 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (0.7.0)
+
+- CMS (RFC 5652) SignedData (`x509kit.cms`) — parsing, signing, verification
+  - `cms_sign(content, key, cert, chain=None, *, detached=False,
+    digest='sha256', sig_scheme='pkcs1v15')` — RSA / Ed25519 / ECDSA
+  - `CMSSignedData.verify(trust_anchor=None, detached_data=None,
+    allow_weak_hash=False)` — signature + messageDigest + optional chain
+  - `CMSSignedData`, `CMSSignerInfo`, `cms_load` — parsing
+  - ContentInfo, attached / detached content
+  - SignerIdentifier: IssuerAndSerialNumber и SubjectKeyIdentifier
+  - Signed attributes: contentType, messageDigest, signingTime
+  - X.509 certificates в `certificates [0]`, CRL в `crls [1]`
+  - Round-trip: `to_der()` / `to_pem()` / `save()`
+  - Проверено с OpenSSL CLI (`openssl cms -verify` → Verification successful)
+- `AlgorithmIdentifier.digest_name` — читаемое имя чистого хэша
+  (`sha256` вместо `2.16.840.1.101.3.4.2.1`)
+- `AlgorithmIdentifier.name` теперь распознаёт чистые хэш-OID
+  (используется в CMS `digestAlgorithms`)
+- `examples/17_cms_sign.py` — sign / verify / detached / OpenSSL interop
+- `test_all.py`: секции 23 (CMS parsing) и 24 (CMS sign/verify), 366/366
+
 ### Planned
-- PKCS#7 / CMS (RFC 5652) signed data
 - CLI: `x509kit info / verify / csr / acme-server`
 - Full RFC 5280 §6 path validation
 - Full type annotations on public API
