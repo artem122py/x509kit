@@ -318,7 +318,16 @@ from .x509 import (
     __version__,
 )
 
+from .acme import (
+    ACMEServer, ACMEError,
+    b64u, b64u_decode,
+    jwk_to_key, jwk_thumbprint, verify_jws,
+)
+
 __all__ = [
+    "ACMEServer", "ACMEError",
+    "b64u", "b64u_decode",
+    "jwk_to_key", "jwk_thumbprint", "verify_jws",
     "ASN1",
     # Ключи
     "RSAKeys", "Ed25519Keys", "ECDSAKeys", "EC_CURVES",

@@ -44,7 +44,7 @@ import socket
 import unicodedata
 import warnings as _warnings
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 
 # ======================================================================
