@@ -176,6 +176,27 @@ If any row fails, our implementation is wrong.
 
 Requires: `pip install cryptography`
 
+## Examples
+
+See [`examples/`](examples/) — 12 runnable scripts covering the whole
+library:
+
+- `01_root_ca.py` — self-signed CA
+- `02_issue_from_csr.py` — issue leaf from CSR
+- `03_self_signed_server.py` — HTTPS with self-signed cert
+- `04_mtls_server.py` — mutual TLS
+- `05_crl_revocation.py` — revoke and generate CRL
+- `06_ocsp_responder.py` — OCSP response
+- `07_pkcs12_export.py` — export to `.p12`
+- `08_parse_real_cert.py` — fetch and parse a live HTTPS cert
+- `09_encrypted_key.py` — encrypted PKCS#8 keys
+- `10_verify_chain.py` — chain verification scenarios
+- `11_name_canonicalization.py` — RFC 4518
+- `12_extensions.py` — all extensions in one cert
+
+Each is self-contained, prints what it does, and shows the OpenSSL
+command to verify the result.
+
 ## What this is
 
 A learning project that turned into a working implementation. It exists
