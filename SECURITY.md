@@ -75,7 +75,19 @@ side channels, or attack surface.
 The library parses and verifies certificates. It does not implement full
 RFC 5280 Section 6 path validation: no policy constraints, no
 name-constraints intersection across the entire path in the strictest
-sense, no AIA chasing, no CRL/OCSP fetching over the network.
+sense.
+
+As of 0.6.0, limited network helpers exist:
+  * `Cert.fetch_crl(ca=...)` — download a CRL via CRL Distribution Points
+  * `Cert.fetch_ocsp(issuer=...)` — POST an OCSP request to AIA responders
+  * `Cert.fetch_issuer(trust_anchor=...)` — AIA chasing up the chain
+  * `x509kit.revocation` — a small HTTP server for CRL/OCSP
+
+These are convenience wrappers, **not** a hardened PKI client. They do
+not implement: response caching, retry policy, AIA loops detection
+beyond max_depth, OCSP stapling, CRL delta handling, or signature
+verification against non-issuer responders. Do not point them at
+untrusted URLs without rate limiting.
 
 ### No platform security integration
 

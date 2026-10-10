@@ -178,7 +178,7 @@ Requires: `pip install cryptography`
 
 ## Examples
 
-See [`examples/`](examples/) — 12 runnable scripts covering the whole
+See [`examples/`](examples/) — 16 runnable scripts covering the whole
 library:
 
 - `01_root_ca.py` — self-signed CA
@@ -193,6 +193,10 @@ library:
 - `10_verify_chain.py` — chain verification scenarios
 - `11_name_canonicalization.py` — RFC 4518
 - `12_extensions.py` — all extensions in one cert
+- `13_acme_server.py` — minimal ACME server (RFC 8555)
+- `14_acme_client.py` — ACME client (run while 13 is running)
+- `15_ct_sct.py` — parse embedded SCT from a real cert
+- `16_revocation.py` — full CRL+OCSP stack over HTTP
 
 Each is self-contained, prints what it does, and shows the OpenSSL
 command to verify the result.
@@ -254,13 +258,19 @@ with: this is for you.
 - PKCS#10 CSR, CRL (RFC 5280), OCSP (RFC 6960), PKCS#12 (RFC 7292)
 - PKCS#8 EncryptedPrivateKeyInfo (PBES2 + PBKDF2 + AES-256-CBC/GCM)
 - RFC 4518 DN canonicalization
+- ACME (RFC 8555) — verified end-to-end with certbot
+- Certificate Transparency (RFC 6962 §3.3) — embedded SCT parsing
+- Network helpers: `Cert.from_url` (with mTLS), `Cert.fetch_crl`,
+  `Cert.fetch_ocsp`, `Cert.fetch_issuer` (AIA chasing),
+  `CertBundle.sort_chain`
+- HTTP server for CRL/OCSP (`x509kit.revocation`)
 - Fluent builders: CertificateBuilder, CSRBuilder, CRLBuilder,
   OCSPResponseBuilder, PKCS12Builder
 - X509Error with fix hints, X509Warning for non-fatal issues
 
 ## Status
 
-Alpha (0.3.0). Educational. Not for production. See
+Alpha (0.6.0). Educational. Not for production. See
 [SECURITY.md](SECURITY.md).
 
 ## License

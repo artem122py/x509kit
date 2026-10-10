@@ -29,6 +29,8 @@ certs/
 *.pem
 *.key
 *.csr
+*.der
+*.crl
 extracted.pem
 
 # pytest / mypy / ruff

@@ -44,7 +44,7 @@ import socket
 import unicodedata
 import warnings as _warnings
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 
 # ======================================================================
@@ -2619,6 +2619,92 @@ def _build_san_extension(entries):
 #  Cert
 # ======================================================================
 
+
+# ---- HTTP helpers для fetch_* ----
+
+def _http_get(url, *, timeout=10, max_size=2 * 1024 * 1024):
+    """GET с ограничением размера. Returns bytes."""
+    import urllib.request as _ur
+    req = _ur.Request(url, method="GET",
+                      headers={"User-Agent": "x509kit/network"})
+    with _ur.urlopen(req, timeout=timeout) as r:
+        data = r.read(max_size + 1)
+    if len(data) > max_size:
+        raise X509Error(f"_http_get: response too large (> {max_size} bytes)")
+    return data
+
+
+def _http_post(url, body, *, content_type="application/octet-stream",
+               timeout=10, max_size=2 * 1024 * 1024):
+    """POST с ограничением размера. Returns bytes."""
+    import urllib.request as _ur
+    req = _ur.Request(url, data=body, method="POST", headers={
+        "Content-Type":   content_type,
+        "Accept":         "application/ocsp-response",
+        "User-Agent":     "x509kit/network",
+    })
+    with _ur.urlopen(req, timeout=timeout) as r:
+        data = r.read(max_size + 1)
+    if len(data) > max_size:
+        raise X509Error(f"_http_post: response too large (> {max_size} bytes)")
+    return data
+
+
+def _materialize_cert_pem(obj, tmp_paths):
+    """Привести cert/bundle/PEM/path к пути к PEM-файлу."""
+    import tempfile as _tf
+
+    if isinstance(obj, str):
+        if "-----BEGIN" in obj:
+            f = _tf.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+            f.write(obj); f.close()
+            tmp_paths.append(f.name)
+            return f.name
+        return obj
+
+    if isinstance(obj, Cert):
+        pem = obj.to_pem()
+    elif isinstance(obj, CertBundle):
+        pem = obj.to_pem()
+    else:
+        raise TypeError(
+            f"_materialize_cert_pem: expected Cert/CertBundle/str, "
+            f"got {type(obj).__name__}")
+
+    f = _tf.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+    f.write(pem); f.close()
+    tmp_paths.append(f.name)
+    return f.name
+
+
+def _materialize_key_pem(obj, tmp_paths):
+    """Привести key/PEM/path к пути к PEM-файлу."""
+    import os as _os
+    import tempfile as _tf
+
+    if isinstance(obj, str):
+        if "-----BEGIN" in obj:
+            f = _tf.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+            f.write(obj); f.close()
+            _os.chmod(f.name, 0o600)
+            tmp_paths.append(f.name)
+            return f.name
+        return obj
+
+    if isinstance(obj, (RSAKeys, Ed25519Keys, ECDSAKeys)):
+        pem = obj.to_private_pem()
+    else:
+        raise TypeError(
+            f"_materialize_key_pem: expected key object or str, "
+            f"got {type(obj).__name__}")
+
+    f = _tf.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+    f.write(pem); f.close()
+    _os.chmod(f.name, 0o600)
+    tmp_paths.append(f.name)
+    return f.name
+
+
 class Cert:
     @_safe_parse
     def __init__(self, data):
@@ -2931,16 +3017,24 @@ class Cert:
 
 
     @classmethod
-    def from_url(cls, url, port=None, timeout=5, verify=False):
+    def from_url(cls, url, port=None, timeout=5, verify=False,
+                 client_cert=None, client_key=None):
         """Загрузить сертификат с HTTPS-сервера.
 
         url — "https://example.com" или просто "example.com"
         verify=False (default) — принять любой сертификат (для инспекции)
         verify=True — упасть, если сертификат невалиден
+        client_cert / client_key — для mTLS. Принимают:
+            * путь к PEM-файлу (str)
+            * PEM-строку (str, содержит -----BEGIN)
+            * Cert, CACert, CertBundle (только client_cert)
+            * RSAKeys, Ed25519Keys, ECDSAKeys (только client_key)
 
         Возвращает Cert.
         """
         import ssl as _ssl
+        import os as _os
+        import tempfile as _tf
         from urllib.parse import urlparse
 
         if "://" in url:
@@ -2960,11 +3054,165 @@ class Cert:
         else:
             ctx = _ssl._create_unverified_context()
 
-        with socket.create_connection((host, port), timeout=timeout) as sock:
-            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-                der = ssock.getpeercert(binary_form=True)
+        # --- mTLS ---
+        tmp_paths = []
+        if client_cert is not None and client_key is not None:
+            cert_path = _materialize_cert_pem(client_cert, tmp_paths)
+            key_path = _materialize_key_pem(client_key, tmp_paths)
+            try:
+                ctx.load_cert_chain(cert_path, key_path)
+            finally:
+                for tp in tmp_paths:
+                    try: _os.unlink(tp)
+                    except OSError: pass
+
+        try:
+            with socket.create_connection((host, port), timeout=timeout) as sock:
+                with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                    der = ssock.getpeercert(binary_form=True)
+        finally:
+            for tp in tmp_paths:
+                try: _os.unlink(tp)
+                except OSError: pass
 
         return cls(der)
+
+    # ---- network fetchers ------------------------------------------
+
+    def fetch_crl(self, ca=None, *, timeout=10, verify_signature=True):
+        """Скачать CRL по URL из crl_distribution_points.
+
+        ca — если задан, проверить подпись CRL.
+        timeout — секунды.
+        verify_signature — если False, не проверять подпись.
+
+        Возвращает CRL или None, если все URL недоступны.
+        """
+        urls = self.crl_distribution_points
+        if not urls:
+            return None
+        last_err = None
+        for url in urls:
+            try:
+                data = _http_get(url, timeout=timeout)
+                crl = CRL(data)
+                if verify_signature and ca is not None:
+                    if not crl.verify_signature(ca):
+                        last_err = X509Error(f"CRL signature invalid from {url}")
+                        continue
+                if not crl.is_valid_at():
+                    last_err = X509Error(f"CRL expired from {url}")
+                    continue
+                return crl
+            except Exception as e:
+                last_err = e
+                continue
+        if last_err is not None:
+            raise X509Error(f"fetch_crl: all URLs failed; last: {last_err}")
+        return None
+
+    def fetch_ocsp(self, issuer, *, timeout=10, hash_name="sha256"):
+        """Отправить OCSP-запрос на URL из aia_ocsp.
+
+        Возвращает dict:
+            {'status': 'good'|'revoked'|'unknown',
+             'reason': str|None,
+             'revoked_at': datetime|None,
+             'this_update': datetime,
+             'next_update': datetime|None,
+             'raw_response': OCSPResponse}
+
+        Или None, если URL не указан.
+        """
+        urls = self.aia_ocsp
+        if not urls:
+            return None
+        req = OCSPRequest.create(issuer=issuer, cert=self, hash_name=hash_name)
+        req_der = req.der
+
+        last_err = None
+        for url in urls:
+            try:
+                resp_der = _http_post(url, req_der,
+                                       content_type="application/ocsp-request",
+                                       timeout=timeout)
+                resp = OCSPResponse(resp_der)
+                if not resp.is_successful:
+                    last_err = X509Error(f"OCSP responder error: {resp.status}")
+                    continue
+                if not resp.verify_signature(issuer):
+                    last_err = X509Error(f"OCSP signature invalid from {url}")
+                    continue
+                if not resp.is_fresh():
+                    last_err = X509Error(f"OCSP response stale from {url}")
+                    continue
+
+                r = resp.responses[0] if resp.responses else None
+                if r is None:
+                    return None
+                reason = None
+                if r.get("reason_code") is not None:
+                    reason = CRL_REASONS_REV.get(r["reason_code"])
+                return {
+                    "status":       r["status"],
+                    "reason":       reason,
+                    "revoked_at":   r.get("revoked_at"),
+                    "this_update":  r.get("this_update"),
+                    "next_update":  r.get("next_update"),
+                    "raw_response": resp,
+                }
+            except Exception as e:
+                last_err = e
+                continue
+        if last_err is not None:
+            raise X509Error(f"fetch_ocsp: all URLs failed; last: {last_err}")
+        return None
+
+    def fetch_issuer(self, *, timeout=10, max_depth=5, trust_anchor=None):
+        """Скачать issuer-сертификат(ы) по AIA ca_issuers (AIA chasing).
+
+        Возвращает список Cert от ближайшего issuer к root включительно.
+        Если trust_anchor задан — останавливаемся, когда дошли до него.
+        """
+        chain = []
+        current = self
+        seen = {self.der}
+        for _ in range(max_depth):
+            urls = current.aia_issuers
+            if not urls:
+                break
+            found = None
+            last_err = None
+            for url in urls:
+                try:
+                    data = _http_get(url, timeout=timeout)
+                    candidate = Cert(data)
+                    # проверяем, что это действительно issuer
+                    if not current.verify_signature(candidate):
+                        last_err = X509Error(
+                            f"signature check failed for {url}")
+                        continue
+                    found = candidate
+                    break
+                except Exception as e:
+                    last_err = e
+                    continue
+            if found is None:
+                if last_err:
+                    raise X509Error(
+                        f"fetch_issuer: cannot load issuer from AIA; "
+                        f"last: {last_err}")
+                break
+            if found.der in seen:
+                break
+            seen.add(found.der)
+            chain.append(found)
+            if trust_anchor is not None and found.der == trust_anchor.der:
+                break
+            if found.is_self_signed():
+                break
+            current = found
+        return chain
 
     def info(self):
         """Текстовое представление в стиле `openssl x509 -text`."""
@@ -3265,20 +3513,47 @@ class CACert(Cert):
             b.add_revoked(serial, when=when, reason=code)
         return b.sign(self._signing_key)
 
-    def respond_ocsp(self, cert_or_serial_or_request, *,
-                     status="good", reason=None, days=7,
-                     nonce=None, hash_name=None):
-        """Выпустить подписанный OCSPResponse для сертификата/серийника/запроса.
+    def revocation_info(self, cert_or_serial):
+        """Вернуть (status, reason, when) для сертификата/серийника.
 
-        Если первый аргумент — OCSPRequest, nonce из него автоматически
-        переносится в ответ.
+        status: 'good' | 'revoked'
+        reason: имя причины или None
+        when:   datetime отзыва (для revoked) или None
+        """
+        if isinstance(cert_or_serial, Cert):
+            serial = cert_or_serial.serial
+        else:
+            serial = int(cert_or_serial)
+        for s, when, code in self._revoked:
+            if s == serial:
+                reason = None
+                if code is not None:
+                    reason = CRL_REASONS_REV.get(code)
+                return ("revoked", reason, when)
+        return ("good", None, None)
+
+    def respond_ocsp(self, cert_or_serial_or_request, *,
+                     status=None, reason=None, days=7,
+                     nonce=None, hash_name=None):
+        """Выпустить подписанный OCSPResponse.
+
+        status:
+            None      → автоопределение по self._revoked
+            'good'    → принудительно good
+            'revoked' → принудительно revoked (reason обязателен)
+            'unknown' → принудительно unknown
+
+        Если первый аргумент — OCSPRequest, nonce из него переносится
+        в ответ автоматически.
         """
         if self._signing_key is None:
             _fail("CACert.respond_ocsp: нет приватного ключа",
-                  "CACert.from_pem(..., private_key_pem=...) или from_cert(..., signing_key=...)")
+                  "CACert.from_pem(..., private_key_pem=...) или "
+                  "from_cert(..., signing_key=...)")
 
-        # Извлекаем цель и nonce
+        # --- Определить цель и nonce ---
         target = cert_or_serial_or_request
+        auto = status is None
         if isinstance(target, OCSPRequest):
             if nonce is None:
                 nonce = target.nonce
@@ -3287,6 +3562,13 @@ class CACert(Cert):
             if target is None:
                 _fail("OCSPRequest пустой")
 
+        # --- Автоопределение статуса ---
+        if auto:
+            st, auto_reason, _when = self.revocation_info(target)
+            status = st
+            if reason is None:
+                reason = auto_reason
+
         b = OCSPResponseBuilder()
         b.set_responder(self)
         b.set_validity(days=days)
@@ -3294,12 +3576,10 @@ class CACert(Cert):
             b.set_nonce(nonce)
         if hash_name:
             b.set_hash(hash_name)
-        # дефолтный хэш подписанта — свой
         if isinstance(self._signing_key, RSAKeys):
             b.set_sig_scheme("pkcs1v15")
         b.add_status(target, status=status, reason=reason)
         return b.sign(self._signing_key)
-
     def verify_ocsp_response(self, response, request=None):
         """Проверить подпись и свежесть ответа. Если дан request — сверить nonce."""
         if not isinstance(response, OCSPResponse):
@@ -3663,6 +3943,45 @@ class CertBundle:
     def __getitem__(self, i): return self.certs[i]
     def __repr__(self):       return f"<CertBundle {len(self.certs)} certs>"
 
+
+    def sort_chain(self):
+        """Упорядочить сертификаты от leaf к root.
+
+        Использует issuer.raw == subject.raw. Возвращает новый CertBundle.
+        Если порядка построить не удалось — возвращает как было.
+        """
+        if len(self.certs) < 2:
+            return CertBundle(list(self.certs))
+
+        remaining = list(self.certs)
+        # Найти leaf: тот, чей issuer не совпадает с subject ни одного другого
+        def find_leaf(pool):
+            subjects = {c.subject.raw for c in pool}
+            # 1. leaf — тот, чей issuer есть в пуле и кто не self-signed
+            for c in pool:
+                if c.subject.raw != c.issuer.raw and c.issuer.raw in subjects:
+                    return c
+            # 2. self-signed (корень, либо единственный)
+            for c in pool:
+                if c.subject.raw == c.issuer.raw:
+                    return c
+            return pool[0]
+
+        chain = [find_leaf(remaining)]
+        remaining.remove(chain[0])
+        while remaining:
+            last = chain[-1]
+            nxt = None
+            for c in remaining:
+                if c.subject.raw == last.issuer.raw:
+                    nxt = c; break
+            if nxt is None:
+                break
+            chain.append(nxt)
+            remaining.remove(nxt)
+        # Если что-то осталось — добавим в конце
+        chain.extend(remaining)
+        return CertBundle(chain)
 
     def to_pkcs12(self, key, password="", name=None, iterations=2048,
                   cipher="aes-256-cbc"):

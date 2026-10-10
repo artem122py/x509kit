@@ -21,6 +21,10 @@ dependencies, prints what it does, and can be run directly:
 | 10 | `10_verify_chain.py`         | Chain verification: what passes, what fails |
 | 11 | `11_name_canonicalization.py`| RFC 4518 DN canonicalization |
 | 12 | `12_extensions.py`           | Certificate with every extension |
+| 13 | `13_acme_server.py`          | Minimal ACME server (RFC 8555) |
+| 14 | `14_acme_client.py`          | ACME client (run while 13 is running) |
+| 15 | `15_ct_sct.py`               | Parse embedded SCT from a real cert |
+| 16 | `16_revocation.py`           | Full revocation stack: CRL + OCSP over HTTP |
 
 ## Recommended order
 

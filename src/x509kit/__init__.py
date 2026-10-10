@@ -15,6 +15,9 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
   * RFC 4518 канонизация DN
   * ACME (RFC 8555) — совместим с certbot
   * Certificate Transparency (RFC 6962) — SCT parsing
+  * Сетевые фичи: Cert.from_url (в т.ч. mTLS), fetch_crl / fetch_ocsp
+    / fetch_issuer, CertBundle.sort_chain
+  * HTTP-серверы CRL/OCSP (x509kit.revocation)
 
 ═══════════════════════════════════════════════════════════════════════
   Ключи
@@ -62,8 +65,23 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     c.verify_signature(issuer) / c.is_self_signed()
     c.to_pem() / c.to_der()
     c.info()                            — вывод в стиле openssl x509 -text
-    Cert.from_url("https://example.com") — скачать и распарсить сертификат
-        ^ accepts "example.com" или "https://host:port"
+    # Сетевые операции (0.6.0):
+    c.fetch_crl(ca=None, timeout=10)         — скачать CRL по CRL DP
+        ^ ca — если задан, проверить подпись CRL
+        ^ возвращает CRL или None (если нет CRL DP)
+    c.fetch_ocsp(issuer, timeout=10)         — OCSP-запрос на aia_ocsp URL
+        ^ возвращает dict {status, reason, revoked_at, this_update, ...}
+        ^ или None, если URL не указан
+    c.fetch_issuer(timeout=10, max_depth=5, trust_anchor=None)
+        ^ AIA chasing по ca_issuers URL
+        ^ возвращает список Cert от ближайшего к root
+
+    Cert.from_url("https://example.com")     — скачать сертификат с сервера
+        ^ принимает "example.com" или "https://host:port"
+        ^ client_cert / client_key — для mTLS:
+              Cert.from_url(url, client_cert=my_cert, client_key=my_key)
+              принимают Cert / PEM-строку / путь / объект ключа
+        ^ verify=True — проверять валидность TLS-сертификата
         ^ возвращает Cert
 
     CACert.create_self_signed(subject, keys, days=3650, path_len=None)
@@ -179,7 +197,7 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
 ═══════════════════════════════════════════════════════════════════════
 
     ASN1 — низкоуровневый DER-парсер (parse, as_int, as_oid, ...)
-        ^ защита: _MAX_DER_SIZE = 50 MB, _MAX_DEPTH = 32
+        ^ защита: _MAX_DER_SIZE = 512 KB, _MAX_DEPTH = 32
     canonicalize_name(name) / names_equal(a, b)   — RFC 4518
 
     Name.from_string("CN=x, O=y, C=XX")           — RFC 4514 parser
@@ -189,12 +207,14 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     san_extension(dns_names=[], ips=[], emails=[], uris=[])
     validate_hostname(cert, "example.com")        — RFC 6125
     load_pem_certs / load_pem_csrs / load_pem_bundle / load_pem_crls
-        ^ защита: _MAX_PEM_SIZE = 10 MB
+        ^ защита: _MAX_PEM_SIZE = 1 MB
     save_pem(path, cert1, cert2, ...)
     pem_encode / pem_decode / verify_chain
 
     CertBundle([c1, c2, ...])
         .from_pem(data) / .from_file(path) / .to_pem() / .save(path)
+        .sort_chain()                            — порядок leaf → root
+            ^ по issuer.raw == subject.raw; возвращает новый CertBundle
         .to_pkcs12(key, password="...", name="...")
             ^ certs[0] — leaf, certs[1:] — chain; возвращает PKCS12
 
@@ -292,6 +312,33 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     Пример: python examples/15_ct_sct.py www.google.com
 
 ═══════════════════════════════════════════════════════════════════════
+  Revocation servers — HTTP CRL/OCSP (x509kit.revocation, 0.6.0)
+═══════════════════════════════════════════════════════════════════════
+
+    from x509kit.revocation import make_revocation_server, run_in_thread
+
+    ca = CACert.from_pem(pem, private_key_pem=key_pem)
+    ca.revoke(leaf, reason="keyCompromise")
+
+    srv = make_revocation_server(ca, host="127.0.0.1", port=0)
+    run_in_thread(srv)                          — daemon-thread
+    print(srv.base_url())                       — http://127.0.0.1:NNNNN
+
+    # Endpoints:
+    #   GET  /crl.pem    — CRL (PEM), пересобирается раз в crl_cache_seconds
+    #   GET  /crl.der    — CRL (DER)
+    #   POST /ocsp       — OCSP-запрос (DER) → OCSP-ответ (DER)
+    #   GET  /           — HTML-статус
+
+    make_revocation_handler(ca, crl_days=7, crl_cache_seconds=60)
+        ^ возвращает класс BaseHTTPRequestHandler (для встраивания)
+
+    RevocationHTTPServer(addr, ca, ...)
+        .base_url() / .ca
+
+    run_in_thread(srv) — обёртка над threading.Thread(daemon=True)
+
+═══════════════════════════════════════════════════════════════════════
   Исключения и предупреждения
 ═══════════════════════════════════════════════════════════════════════
 
@@ -374,7 +421,15 @@ from .acme import (
     jwk_to_key, jwk_thumbprint, verify_jws,
 )
 
+
+from .revocation import (
+    make_revocation_server, make_revocation_handler,
+    RevocationHTTPServer, run_in_thread,
+)
+
 __all__ = [
+    "make_revocation_server", "make_revocation_handler",
+    "RevocationHTTPServer", "run_in_thread",
     "ACMEServer", "ACMEError",
     "b64u", "b64u_decode",
     "jwk_to_key", "jwk_thumbprint", "verify_jws",

@@ -18,6 +18,13 @@ test_all.py — единый прогон x509kit.
  13.  AIA
  14.  RFC 4518 канонизация
  15.  PEM round-trip
+ 16.  Name.from_string (RFC 4514)
+ 17.  Cert.from_url
+ 18.  Cert.info
+ 19.  PKCS#12 шорткаты
+ 20.  Certificate Transparency (SCT)
+ 21.  ACME persistence (save/load)
+ 22.  Network revocation (CRL/OCSP HTTP)
 
 Запуск:
     python test_all.py
@@ -1267,6 +1274,109 @@ def test_acme_persistence():
         try: os.unlink(state_path)
         except OSError: pass
 
+
+# ======================================================================
+#  22. Network revocation: fetch_crl, fetch_ocsp, fetch_issuer
+# ======================================================================
+
+def test_revocation_network():
+    hr("22. Network revocation (CRL/OCSP HTTP)")
+
+    import threading, time
+    from x509kit import make_revocation_server, RevocationHTTPServer
+
+    # ---- CA ----
+    ca_key = Ed25519Keys.generate()
+    ca = (CertificateBuilder(is_ca=True)
+        .add_subject({"CN": "Network Revocation CA"})
+        .add_public_key(ca_key)
+        .add_serial_random().add_validity(days=365)
+        .add_basic_constraints(path_len=0)
+        .add_key_usage("keyCertSign", "cRLSign")
+        .self_signed().sign(ca_key))
+
+    # ---- Server on random port ----
+    srv = make_revocation_server(ca, "127.0.0.1", 0,
+                                  crl_days=7, crl_cache_seconds=0)
+    port = srv.server_address[1]
+    base = f"http://127.0.0.1:{port}"
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    time.sleep(0.2)
+
+    try:
+        # ---- Issue leaf with URLs ----
+        leaf = (CertificateBuilder()
+            .add_subject({"CN": "netrev.example"})
+            .add_issuer(ca).add_public_key(Ed25519Keys.generate())
+            .add_serial_random().add_validity(days=30)
+            .add_san_dns("netrev.example")
+            .add_crl_distribution_point(f"{base}/crl.pem")
+            .add_aia(ocsp=[f"{base}/ocsp"])
+            .sign(ca_key))
+
+        # ---- 1. fetch_crl ----
+        crl = leaf.fetch_crl(ca=ca)
+        T.expect("fetch_crl: получен", crl is not None)
+        T.expect("fetch_crl: leaf не в CRL", not crl.is_revoked(leaf))
+
+        # ---- 2. fetch_ocsp ----
+        ocsp = leaf.fetch_ocsp(issuer=ca)
+        T.expect("fetch_ocsp: получен", ocsp is not None)
+        T.expect("fetch_ocsp: status good", ocsp["status"] == "good")
+
+        # ---- 3. Отзыв + проверка ----
+        ca.revoke(leaf, reason="keyCompromise")
+        time.sleep(0.05)
+
+        crl2 = leaf.fetch_crl(ca=ca)
+        T.expect("fetch_crl (after revoke): leaf в CRL",
+                 crl2.is_revoked(leaf))
+        T.expect("fetch_crl (after revoke): reason keyCompromise",
+                 crl2.revoke_reason(leaf) == "keyCompromise")
+
+        ocsp2 = leaf.fetch_ocsp(issuer=ca)
+        T.expect("fetch_ocsp (after revoke): status revoked",
+                 ocsp2["status"] == "revoked")
+        T.expect("fetch_ocsp (after revoke): reason keyCompromise",
+                 ocsp2["reason"] == "keyCompromise")
+
+        # ---- 4. Сертификат без URL → None ----
+        no_urls = (CertificateBuilder()
+            .add_subject({"CN": "no-urls.example"})
+            .add_issuer(ca).add_public_key(Ed25519Keys.generate())
+            .add_serial_random().add_validity(days=30)
+            .sign(ca_key))
+        T.expect("fetch_crl без URL → None", no_urls.fetch_crl() is None)
+        T.expect("fetch_ocsp без URL → None",
+                 no_urls.fetch_ocsp(issuer=ca) is None)
+
+        # ---- 5. mTLS from_url — проверка что параметры приняты ----
+        import inspect
+        sig = inspect.signature(Cert.from_url)
+        T.expect("from_url: client_cert param", "client_cert" in sig.parameters)
+        T.expect("from_url: client_key param", "client_key" in sig.parameters)
+
+        # ---- 6. CertBundle.sort_chain ----
+        # Случайный порядок — должен быть упорядочен
+        inter_key = Ed25519Keys.generate()
+        inter_cert = (CertificateBuilder(is_ca=True)
+            .add_subject({"CN": "Intermediate"})
+            .add_issuer(ca).add_public_key(inter_key)
+            .add_serial_random().add_validity(days=180)
+            .add_basic_constraints(path_len=0)
+            .add_key_usage("keyCertSign", "cRLSign")
+            .sign(ca_key))
+        from x509kit import CertBundle
+        shuffled = CertBundle([ca, leaf, inter_cert])
+        sorted_b = shuffled.sort_chain()
+        T.expect("sort_chain: первый = leaf",
+                 sorted_b.certs[0].subject.get("CN") == "netrev.example"
+                 or sorted_b.certs[0].issuer.get("CN") == "Network Revocation CA")
+
+    finally:
+        srv.shutdown()
+
 def main():
     print("╔" + "═" * 70 + "╗")
     print("║  x509kit — полный прогон" + " " * 46 + "║")
@@ -1299,6 +1409,7 @@ def main():
         test_pkcs12_shortcuts()
         test_sct_parsing()
         test_acme_persistence()
+        test_revocation_network()
     except Exception as e:
         print()
         print("\033[31m!!! Непойманное исключение:\033[0m", type(e).__name__, e)

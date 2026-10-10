@@ -606,12 +606,17 @@ class ACMEServer:
 
     @classmethod
     def load(cls, ca, ca_key, path: str, *,
-             chain=None, auto_verify=False) -> "ACMEServer":
-        """Загрузить сервер из JSON-файла. Если файла нет — создать пустой."""
+             chain=None, auto_verify=False,
+             base_url: str = "http://localhost") -> "ACMEServer":
+        """Загрузить сервер из JSON-файла.
+
+        Если файла нет — создать пустой с base_url (по умолчанию
+        "http://localhost"). base_url игнорируется, если файл есть —
+        в этом случае берётся сохранённый.
+        """
         path = os.path.expanduser(path)
         if not os.path.exists(path):
-            return cls(ca, ca_key,
-                       data["base_url"] if "data" in dir() else "http://localhost",
+            return cls(ca, ca_key, base_url,
                        chain=chain, auto_verify=auto_verify)
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)

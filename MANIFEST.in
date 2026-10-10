@@ -10,4 +10,3 @@ include check_docs.py
 include check_dispatcher.py
 include check_no_hidden.py
 include fuzz_x509.py
-include stress_x509kit.py

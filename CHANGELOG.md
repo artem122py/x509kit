@@ -7,14 +7,91 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Planned
+- PKCS#7 / CMS (RFC 5652) signed data
+- CLI: `x509kit info / verify / csr / acme-server`
+- Full RFC 5280 §6 path validation
 - Full type annotations on public API
-- `Name.from_string("CN=x, O=y, C=XX")` parser
-- `Cert.from_url("https://...")` convenience
 - `X25519Keys` for ECDH
-- ACME (RFC 8555) compatibility
 - Coverage reporting in CI
 
-## [0.3.0] - 2026-10-10
+## [0.6.0] - 2026-10-10
+
+### Added
+- Network fetchers on `Cert`:
+  - `Cert.fetch_crl(ca=None, timeout=10)` — download CRL via CRL DP
+  - `Cert.fetch_ocsp(issuer, timeout=10)` — OCSP request to AIA responder
+  - `Cert.fetch_issuer(timeout=10, max_depth=5, trust_anchor=None)` —
+    AIA chasing up the chain
+- `Cert.from_url(url, port=None, timeout=5, verify=False,
+  client_cert=None, client_key=None)` — fetch peer certificate from
+  an HTTPS server; supports mTLS via `client_cert` / `client_key`
+  (path, PEM string, or x509kit object)
+- `CertBundle.sort_chain()` — order certificates leaf → root
+- New module `x509kit.revocation`:
+  - `make_revocation_server(ca, host, port, crl_days=7,
+    crl_cache_seconds=60)` — HTTP server serving CRL and OCSP
+  - `make_revocation_handler(ca, ...)` — embeddable handler class
+  - `RevocationHTTPServer`, `run_in_thread(srv)`
+  - Endpoints: `GET /crl.pem`, `GET /crl.der`,
+    `POST /ocsp`, `GET /` (HTML status)
+- `acme.ACMEServer.load(..., base_url=...)` — explicit base URL when
+  creating a fresh server from a missing state file
+
+### Changed
+- `_materialize_cert_pem` / `_materialize_key_pem` helpers are the single
+  place for cert/key materialization in `Cert.from_url`
+- Private key temp files are created with mode `0600` (mTLS path)
+
+### Fixed
+- `CertBundle.sort_chain()` picked self-signed CA as leaf instead of the
+  actual end-entity (now prefers a non-self-signed cert whose issuer is
+  in the bundle)
+- `acme.ACMEServer.load()` no longer relies on a stray `dir()` check
+  when the state file does not exist
+
+### Tests
+- `test_all.py`: 297 checks (up from 279 in 0.5.0)
+- New section `22. Network revocation (CRL/OCSP HTTP)`:
+  - fetch_crl / fetch_ocsp round-trips against a live
+    `RevocationHTTPServer` on `127.0.0.1:0`
+  - revoked status reflection via `ca.revoke(...)`
+  - `CertBundle.sort_chain()` order verification
+  - signature of `Cert.from_url` for mTLS parameters
+
+## [0.5.0] - 2026-09-XX
+
+### Added
+- Certificate Transparency (RFC 6962 §3.3): SCT parsing
+  - `Cert.sct_list`, `Cert.has_sct`, `OID_SCT`
+- ACME persistence: `ACMEServer.save / load / to_dict / from_dict`
+
+## [0.4.0] - 2026-09-XX
+
+### Added
+- ACME (RFC 8555): `ACMEServer` with `directory`, `new-account`,
+  `new-order`, `authz`, http-01 challenge, `finalize`, certificate
+  download
+- JWS verification (RFC 7515): EdDSA, ES256/384/512, RS256
+- JWK (RFC 7517) / thumbprint (RFC 7638)
+- Verified end-to-end with certbot
+
+## [0.3.2] - 2026-08-XX
+
+### Added
+- `Name.from_string("CN=x, O=y, C=XX")` (RFC 4514)
+- `Cert.from_url("https://...")`
+- `Cert.info()` — `openssl x509 -text`-style output
+- `CertBundle.to_pkcs12(key, password=..., name=...)`
+- `key.to_pkcs12(cert, chain=[...], password=..., name=...)` on all
+  three key types (RSAKeys, Ed25519Keys, ECDSAKeys)
+
+## [0.3.1] - 2026-07-XX
+
+### Changed
+- CI: Trusted Publishing to PyPI on `v*` tags
+- Publish workflow only triggers on tags, main runs tests only
+
+## [0.3.0] - 2026-07-XX
 
 First public release.
 

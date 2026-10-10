@@ -2,7 +2,6 @@
 
 Все проверки в `test_all.py`, сгруппированные по функциям.
 
-Скрипт-генератор: `python -m x509kit.tools.gen_test_index` (см. test_all.py).
 
 ## `test_rsa` (11)
 
