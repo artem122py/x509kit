@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "x509kit"
-version = "0.3.0"
+version = "0.3.1"
 description = "Pure-Python X.509 / PKCS#10 / CRL / OCSP / PKCS#12 toolkit — stdlib only"
 readme = "README.md"
 requires-python = ">=3.9"
