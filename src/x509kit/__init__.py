@@ -1,5 +1,5 @@
 """
-x509kit — X.509 / PKCS#10 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
+x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
 Только стандартная библиотека Python.
 
 Поддерживает:
@@ -43,6 +43,9 @@ x509kit — X.509 / PKCS#10 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     c.not_before / c.not_after / c.is_valid_at(when=None)
     c.public_key / c.spki_der / c.key_algorithm_oid
     c.extensions / c.ext_get(oid) / c.san
+    c.dns_names / c.ip_addresses / c.emails / c.uris
+        ^ SAN-списки по типу (удобный доступ вместо фильтрации c.san)
+    c.crl_distribution_points           — URL'ы CRL Distribution Points
     c.ski / c.aki                       — AKI/SKI идентификаторы
     c.eku / c.has_eku("serverAuth")     — Extended Key Usage
     c.name_constraints                  — Name Constraints (dict|None)
@@ -78,6 +81,8 @@ x509kit — X.509 / PKCS#10 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     CSR(pem_or_der)
     csr.subject / csr.public_key / csr.spki_der
     csr.san / csr.eku / csr.has_eku("serverAuth") / csr.extensions
+    csr.dns_names / csr.ip_addresses / csr.emails / csr.uris
+        ^ SAN-списки из extensionRequest
     csr.verify_signature() / csr.to_pem()
 
 ═══════════════════════════════════════════════════════════════════════
@@ -163,10 +168,13 @@ x509kit — X.509 / PKCS#10 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
   Хелперы и OID
 ═══════════════════════════════════════════════════════════════════════
 
+    ASN1 — низкоуровневый DER-парсер (parse, as_int, as_oid, ...)
+        ^ защита: _MAX_DER_SIZE = 50 MB, _MAX_DEPTH = 32
     canonicalize_name(name) / names_equal(a, b)   — RFC 4518
     san_extension(dns_names=[], ips=[], emails=[], uris=[])
     validate_hostname(cert, "example.com")        — RFC 6125
     load_pem_certs / load_pem_csrs / load_pem_bundle / load_pem_crls
+        ^ защита: _MAX_PEM_SIZE = 10 MB
     save_pem(path, cert1, cert2, ...)
     pem_encode / pem_decode / verify_chain
 
