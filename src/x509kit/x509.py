@@ -129,8 +129,8 @@ TAG_SEQUENCE         = 0x30
 TAG_SET              = 0x31
 
 _MAX_DEPTH = 32
-_MAX_PEM_SIZE = 10 * 1024 * 1024   # 10 MB (защита от DoS)
-_MAX_DER_SIZE = 50 * 1024 * 1024   # 50 MB (защита от DoS)
+_MAX_PEM_SIZE = 1 * 1024 * 1024   # 1 MB (base64 от 512 KB DER + запас)
+_MAX_DER_SIZE = 512 * 1024   # 512 KB (макс. реального X.509 ~50 KB)
 
 
 def _safe_parse(func):
