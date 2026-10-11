@@ -6,6 +6,19 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-11
+
+### Added
+- `src/x509kit/__main__.py` — `python -m x509kit ...` теперь работает
+  как полный эквивалент `x509kit ...` (entry point) и
+  `python -m x509kit.cli ...`
+
+### Fixed
+- Installation no longer requires `$PREFIX/bin` (or the venv's `bin/`)
+  to be on `PATH` just to invoke the CLI: `python -m x509kit info cert.pem`
+  works directly from any directory that can import the package.
+
+
 ## [0.9.0] - 2026-10-11
 
 Security release. Four CVE-class issues in input validation, plus
