@@ -3615,6 +3615,22 @@ def _build_cert_der(*, serial, hash_name, issuer_der, subject_der,
     if serial <= 0:
         raise ValueError("serial must be positive")
 
+    # RFC 5280 §4.2: не более одной копии конкретного расширения.
+    # OpenSSL 3.x отвергает сертификаты с дублями
+    # (ossl_x509v3_cache_extensions:invalid certificate).
+    seen_oids = set()
+    for ext_der in extensions:
+        oid = _ext_oid(ext_der)
+        if oid and oid in seen_oids:
+            raise X509Error(
+                f"duplicate extension in certificate: {oid}",
+                "RFC 5280 §4.2 запрещает дубли расширений. "
+                "Проверь вызовы .add_extended_key_usage / "
+                "from_csr(copy_extensions=True)",
+            )
+        if oid:
+            seen_oids.add(oid)
+
     # sig_alg не зависит от tbs — вычисляем заранее через диспетчер.
     # Передаём пустую data: диспетчер использует её только для подписи,
     # а нам здесь нужен только AlgorithmIdentifier. Подпишем tbs ниже.
@@ -4094,6 +4110,9 @@ class CSR:
             lines.append(f"  Pubkey:  RSA {key.size_bits} bit (e={key.e})")
         elif isinstance(key, Ed25519Keys):
             lines.append(f"  Pubkey:  Ed25519")
+        elif isinstance(key, ECDSAKeys):
+            cname = key.curve.get("name", key.curve_oid)
+            lines.append(f"  Pubkey:  ECDSA {cname} ({key.size_bits} bit)")
         else:
             lines.append(f"  Pubkey:  {self.key_algorithm_oid}")
         san = self.san
@@ -6742,17 +6761,26 @@ class CertificateBuilder:
         return self
 
     def add_extended_key_usage(self, *purposes, critical=False):
-        """Extended Key Usage. Пример:
+        """Extended Key Usage.
+
+        Идемпотентно: если EKU уже задан (например, скопирован из CSR
+        через from_csr(copy_extensions=True)), он **заменяется**, а не
+        дублируется. RFC 5280 §4.2: не более одной копии расширения.
+
+        Пример:
             .add_extended_key_usage("serverAuth", "clientAuth")
         """
-        self._extensions.append(_enc_eku(purposes))
-        if critical and not self._extensions[-1][1] == 0x01:
-            # пересобираем с critical=True
-            self._extensions[-1] = _enc_extension(
-                OID_EXT_KEY_USAGE, True, der_seq(
-                    *[encode_oid(EKU_OIDS.get(p, p)) for p in purposes]
-                )
-            )
+        if len(purposes) == 1 and isinstance(purposes[0], (list, tuple, set)):
+            purposes = tuple(purposes[0])
+        # Убираем существующий EKU
+        self._extensions = [
+            e for e in self._extensions
+            if _ext_oid(e) != OID_EXT_KEY_USAGE
+        ]
+        body = der_seq(*[encode_oid(EKU_OIDS.get(p, p)) for p in purposes])
+        self._extensions.append(
+            _enc_extension(OID_EXT_KEY_USAGE, critical, body)
+        )
         return self
 
     # короткий алиас
@@ -7191,7 +7219,16 @@ class CSRBuilder:
         return self
 
     def add_extended_key_usage(self, *purposes, critical=False):
-        """Extended Key Usage для CSR."""
+        """Extended Key Usage для CSR.
+
+        Идемпотентно: повторный вызов заменяет предыдущий EKU.
+        """
+        if len(purposes) == 1 and isinstance(purposes[0], (list, tuple, set)):
+            purposes = tuple(purposes[0])
+        self._extensions = [
+            e for e in self._extensions
+            if _ext_oid(e) != OID_EXT_KEY_USAGE
+        ]
         body = der_seq(*[encode_oid(EKU_OIDS.get(p, p)) for p in purposes])
         self._extensions.append(
             _enc_extension(OID_EXT_KEY_USAGE, critical, body)

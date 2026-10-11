@@ -33,6 +33,7 @@ test_all.py — единый прогон x509kit.
  28.  Zero public key / small-order defenses
  29.  ECDSA: invalid curve point / point at infinity
  30.  Weak RSA warning on every construction path
+ 31.  CLI must-have: cert / key / p12 / crl namespaces
 
 Запуск:
     python test_all.py
@@ -2253,6 +2254,178 @@ def test_weak_rsa_warning_paths():
 
 
 
+def test_cli_must():
+    hr("31. CLI must-have: cert / key / p12 / crl namespaces")
+
+    import io
+    import contextlib
+    import os
+    import shutil
+    import tempfile
+    from x509kit.cli import main as cli_main
+
+    _base = (os.environ.get("TMPDIR")
+             or os.path.expanduser("~/.cache")
+             or os.path.expanduser("~")
+             or ".")
+    os.makedirs(_base, exist_ok=True)
+    tmpdir = tempfile.mkdtemp(prefix="x509kit-cli-must-", dir=_base)
+
+    def run(argv):
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                rc = cli_main(argv)
+        except SystemExit as e:
+            rc = e.code if isinstance(e.code, int) else 0
+        return rc, out.getvalue(), err.getvalue()
+
+    try:
+        # --- setup: ключи и сертификаты ---
+        ca_key = Ed25519Keys.generate()
+        ca = (CertificateBuilder(is_ca=True)
+              .add_subject({"CN": "Must CA"})
+              .add_public_key(ca_key)
+              .add_serial_random().add_validity(days=365)
+              .add_basic_constraints(path_len=0)
+              .add_key_usage("keyCertSign", "cRLSign")
+              .self_signed().sign(ca_key))
+
+        leaf_key = Ed25519Keys.generate()
+        leaf = (CertificateBuilder()
+                .add_subject({"CN": "leaf.example"})
+                .add_issuer(ca).add_public_key(leaf_key)
+                .add_serial_random().add_validity(days=90)
+                .add_san_dns("leaf.example")
+                .add_eku("serverAuth")
+                .sign(ca_key))
+
+        ca_path = os.path.join(tmpdir, "ca.pem")
+        leaf_path = os.path.join(tmpdir, "leaf.pem")
+        ca_key_path = os.path.join(tmpdir, "ca.key")
+        leaf_key_path = os.path.join(tmpdir, "leaf.key")
+
+        with open(ca_path, "w") as f: f.write(ca.to_pem())
+        with open(leaf_path, "w") as f: f.write(leaf.to_pem())
+        with open(ca_key_path, "w") as f: f.write(ca_key.to_private_pem())
+        with open(leaf_key_path, "w") as f: f.write(leaf_key.to_private_pem())
+
+        # --- cert fingerprint ---
+        rc, out, err = run(["cert", "fingerprint", leaf_path])
+        T.expect("cert fingerprint: rc=0", rc == 0, f"err={err[:100]}")
+        T.expect("cert fingerprint: colon format",
+                 ":" in out and len(out.strip().split(":")) == 32)
+
+        rc, out, err = run(["cert", "fingerprint", leaf_path, "--no-colon"])
+        T.expect("cert fingerprint --no-colon: 64 hex, no colon",
+                 len(out.strip()) == 64 and ":" not in out.strip())
+
+        rc, out, err = run(["cert", "fingerprint", leaf_path, "--spki"])
+        T.expect("cert fingerprint --spki: rc=0", rc == 0)
+
+        # --- cert matches-key ---
+        rc, out, err = run(["cert", "matches-key", leaf_path, leaf_key_path])
+        T.expect("cert matches-key (correct): rc=0", rc == 0)
+        rc, out, err = run(["cert", "matches-key", leaf_path, ca_key_path])
+        T.expect("cert matches-key (wrong): rc=1", rc == 1)
+
+        # --- cert chain ---
+        bundle_path = os.path.join(tmpdir, "bundle.pem")
+        with open(bundle_path, "w") as f:
+            f.write(leaf.to_pem() + ca.to_pem())
+        sorted_path = os.path.join(tmpdir, "sorted.pem")
+        rc, out, err = run(["cert", "chain", bundle_path, "--out", sorted_path])
+        T.expect("cert chain: rc=0", rc == 0)
+        T.expect("cert chain: file written", os.path.exists(sorted_path))
+        sorted_b = CertBundle.from_pem(open(sorted_path).read())
+        T.expect("cert chain: leaf first",
+                 sorted_b.certs[0].subject.get("CN") == "leaf.example")
+
+        # --- key info / pub / convert ---
+        rc, out, err = run(["key", "info", leaf_key_path])
+        T.expect("key info: rc=0", rc == 0, f"err={err[:100]}")
+        T.expect("key info: Ed25519 mentioned", "Ed25519" in out)
+
+        pub_path = os.path.join(tmpdir, "pub.pem")
+        rc, out, err = run(["key", "pub", leaf_key_path, "--out", pub_path])
+        T.expect("key pub: rc=0", rc == 0)
+        T.expect("key pub: file written", os.path.exists(pub_path))
+        with open(pub_path) as f:
+            T.expect("key pub: PUBLIC KEY PEM", "PUBLIC KEY" in f.read())
+
+        der_path = os.path.join(tmpdir, "key.der")
+        rc, out, err = run(["key", "convert", leaf_key_path,
+                             "--format", "der", "--out", der_path])
+        T.expect("key convert der: rc=0", rc == 0)
+        T.expect("key convert der: file written", os.path.exists(der_path))
+
+        # --- csr verify ---
+        csr_path = os.path.join(tmpdir, "req.csr")
+        rc, out, err = run(["csr", "create", "--key", leaf_key_path,
+                             "--subject", "CN=verify.example",
+                             "--out", csr_path])
+        T.expect("csr create (setup): rc=0", rc == 0)
+        rc, out, err = run(["csr", "verify", csr_path])
+        T.expect("csr verify: rc=0", rc == 0)
+        T.expect("csr verify: OK", "OK" in out)
+
+        # --- crl create ---
+        crl_path = os.path.join(tmpdir, "test.crl.pem")
+        rc, out, err = run(["crl", "create", "--ca", ca_path,
+                             "--ca-key", ca_key_path,
+                             "--revoke", "0xAAAA", "--revoke", "0xBBBB",
+                             "--days", "7", "--out", crl_path])
+        T.expect("crl create: rc=0", rc == 0, f"err={err[:150]}")
+        T.expect("crl create: file written", os.path.exists(crl_path))
+        crl = CRL(open(crl_path, "rb").read())
+        T.expect("crl create: 2 revoked", len(crl.revoked) == 2)
+
+        # --- p12 create / export (both via `p12` and `pkcs12`) ---
+        p12_path = os.path.join(tmpdir, "test.p12")
+        rc, out, err = run(["p12", "create",
+                             "--key", leaf_key_path,
+                             "--cert", leaf_path,
+                             "--password", "pw",
+                             "--out", p12_path])
+        T.expect("p12 create: rc=0", rc == 0, f"err={err[:150]}")
+        T.expect("p12 create: file written", os.path.exists(p12_path))
+
+        export_dir = os.path.join(tmpdir, "extracted")
+        rc, out, err = run(["p12", "export", p12_path,
+                             "--password", "pw",
+                             "--out-dir", export_dir])
+        T.expect("p12 export: rc=0", rc == 0, f"err={err[:150]}")
+        for fname in ("cert.pem", "key.pem"):
+            T.expect(f"p12 export: {fname}",
+                     os.path.exists(os.path.join(export_dir, fname)))
+
+        # pkcs12 (длинная форма) — эквивалент
+        rc, out, err = run(["pkcs12", "info", p12_path, "--password", "pw"])
+        T.expect("pkcs12 info (long form): rc=0", rc == 0)
+        T.expect("pkcs12 info: MAC valid", "MAC valid" in out)
+
+        # p12 info (короткая форма) — тоже работает
+        rc, out, err = run(["p12", "info", p12_path, "--password", "pw"])
+        T.expect("p12 info (alias): rc=0", rc == 0)
+
+        # --- verify --crl ---
+        # Отзовём leaf, пересоберём CRL, проверим
+        ca_with_key = CACert.from_cert(ca, signing_key=ca_key)
+        ca_with_key.revoke(leaf, reason="keyCompromise")
+        crl2 = ca_with_key.to_crl(days=7)
+        crl2_path = os.path.join(tmpdir, "revoked.crl.pem")
+        with open(crl2_path, "w") as f:
+            f.write(crl2.to_pem())
+
+        rc, out, err = run(["verify", "--ca", ca_path,
+                             "--crl", crl2_path, leaf_path])
+        T.expect("verify --crl revoked → rc=1", rc == 1)
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def main():
     print("╔" + "═" * 70 + "╗")
     print("║  x509kit — полный прогон" + " " * 46 + "║")
@@ -2294,6 +2467,7 @@ def main():
         test_zero_pubkey_defense()
         test_ecdsa_invalid_point()
         test_weak_rsa_warning_paths()
+        test_cli_must()
     except Exception as e:
         print()
         print("\033[31m!!! Непойманное исключение:\033[0m", type(e).__name__, e)

@@ -43,6 +43,9 @@ dev = [
     "ruff",
 ]
 
+[project.scripts]
+x509kit = "x509kit.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/artem122py/x509kit"
 Documentation = "https://github.com/artem122py/x509kit#readme"
