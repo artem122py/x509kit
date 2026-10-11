@@ -15,9 +15,11 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
   * RFC 4518 канонизация DN
   * ACME (RFC 8555) — совместим с certbot
   * Certificate Transparency (RFC 6962) — SCT parsing
+  * CMS (RFC 5652) SignedData — parsing, signing, verification
   * Сетевые фичи: Cert.from_url (в т.ч. mTLS), fetch_crl / fetch_ocsp
     / fetch_issuer, CertBundle.sort_chain
   * HTTP-серверы CRL/OCSP (x509kit.revocation)
+  * CLI: x509kit info / keygen / csr / verify / cms / pkcs12 / crl
 
 ═══════════════════════════════════════════════════════════════════════
   Ключи
@@ -25,7 +27,10 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
 
     RSAKeys.generate(2048)
     RSAKeys.from_pem(pem, private=True, password="...")
+    RSAKeys.from_public_der(spki_der)
+    RSAKeys.from_public_bytes(der, fmt="spki"|"pkcs1")   # явный формат
     k.to_private_pem(password="...") / k.to_public_pem()
+    k.to_public_der()              — SubjectPublicKeyInfo DER
     k.sign_pkcs1v15(msg, "sha256") / k.verify_pkcs1v15(msg, sig, "sha256")
     k.sign_pss(msg, "sha256")      / k.verify_pss(msg, sig, "sha256")
     k.size_bits / k.is_private / k.weak
@@ -36,10 +41,17 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
 
     Ed25519Keys.generate() / Ed25519Keys(seed=bytes(32))
     Ed25519Keys.from_pem(pem, private=True, password="...")
+    Ed25519Keys.from_public_der(spki_der)
+    Ed25519Keys.from_public_bytes(32_raw_bytes)         # RFC 8032 §5.1.2
     k.sign(msg) / k.verify(msg, sig) / k.pub
+    k.to_public_der() / k.to_public_pem()
 
     ECDSAKeys.generate("P-256"|"P-384"|"P-521"|"secp256k1")
     ECDSAKeys.from_pem(pem, private=True, password="...")
+    ECDSAKeys.from_public_der(spki_der)
+    ECDSAKeys.from_public_bytes(sec1, curve="P-256")    # X9.62 §4.3.6
+        ^ sec1: 0x04||X||Y (uncompressed) или 0x02/0x03||X (compressed)
+        ^ curve обязателен — по длине кривая однозначно не определяется
     k.sign(msg, "sha256") / k.verify(msg, sig, "sha256")
     k.pub / k.curve_oid / k.point
 
@@ -159,9 +171,13 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
 
     CertificateBuilder(is_ca=False)
         .add_subject({"CN": "example.com", "O": "Org", "C": "XX"})
-        .add_issuer(ca) / .self_signed()
+        .add_issuer(ca) / .self_signed()    # взаимоисключающие
         .add_public_key(key)             — RSAKeys/Ed25519Keys/ECDSAKeys/SPKI/CSR
         .add_serial_random() / .add_serial(n)
+
+        # Guard: add_subject / add_issuer / add_public_key / add_serial /
+        # add_serial_random / self_signed — повторный вызов → X509Error
+        # с подсказкой «создай новый CertificateBuilder()».
         .add_validity(days=365) / .add_not_before(dt) / .add_not_after(dt)
         .add_san(dns=[], ips=[], emails=[], uris=[])
         .add_san_dns("a.com", "b.com") / .add_san_ip("1.2.3.4")
@@ -186,6 +202,7 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
 ═══════════════════════════════════════════════════════════════════════
 
     CSRBuilder()
+        # Guard: add_subject / add_public_key — повторный вызов → X509Error
         .add_subject({...}) / .add_public_key(key)
         .add_san(...) / .add_san_dns(...) / .add_san_ip(...)
         .add_extended_key_usage("serverAuth")
@@ -402,6 +419,67 @@ x509kit — X.509 / PKCS#10 / PKCS#12 / RSA / Ed25519 / ECDSA / CRL / OCSP / NC.
     НЕ реализовано: EnvelopedData / DigestedData / EncryptedData /
     AuthenticatedData, CAdES-BES/LT/LTA, timestamping, external TSA.
     Проверено с OpenSSL CLI (openssl cms -sign / -verify).
+
+═══════════════════════════════════════════════════════════════════════
+  CLI (x509kit.cli, entry point "x509kit")
+═══════════════════════════════════════════════════════════════════════
+
+После `pip install -e .` (или обычной установки) доступна команда
+`x509kit`:
+
+    $ x509kit --version
+    $ x509kit --help
+
+    # --- info: как `openssl x509 -text` ---
+    $ x509kit info cert.pem
+    $ x509kit info https://example.com         # fetch + parse
+    $ x509kit info -                           # stdin
+    $ x509kit info https://example.com --verify   # проверять TLS-цепочку
+
+    # --- keygen ---
+    $ x509kit keygen --type ed25519 --out key.pem
+    $ x509kit keygen --type rsa --bits 4096 --out rsa.pem
+    $ x509kit keygen --type ec --curve P-384 --out ec.pem
+    $ x509kit keygen --type ed25519 --password hunter2 --out enc.pem
+    $ x509kit keygen --type ed25519 --out -    # stdout
+
+    # --- csr: info / create ---
+    $ x509kit csr info req.csr
+    $ x509kit csr create --key key.pem \
+        --subject "CN=x.com, O=MyOrg, C=XX" \
+        --san dns=x.com --san dns=www.x.com \
+        --san ip=192.0.2.1 \
+        --san email=admin@x.com \
+        --san uri=https://x.com \
+        --hash sha384 \
+        --out req.csr
+
+    # --- verify: цепочка сертификатов ---
+    $ x509kit verify --ca ca.pem leaf.pem
+    $ x509kit verify --ca ca.pem --untrusted inter.pem leaf.pem
+
+    # --- cms: verify SignedData ---
+    $ x509kit cms verify msg.p7s --ca ca.pem
+    $ x509kit cms verify msg.p7s.sig --content data.bin --ca ca.pem
+
+    # --- pkcs12: info ---
+    $ x509kit pkcs12 info alice.p12 --password hunter2
+
+    # --- crl: info ---
+    $ x509kit crl info revoked.crl.pem
+
+Exit codes:
+    0 — успех
+    1 — runtime error (файл не найден, парсинг, verify failed)
+    2 — ошибка использования (argparse, неизвестный --san kind)
+
+Примеры через python-модуль (без entry point):
+
+    $ python -m x509kit.cli info cert.pem
+
+См. также: examples/ — все примеры запускаются напрямую.
+CLI не включает: renew, ACME-клиент, генерацию CA из JSON-конфига —
+это библиотечные вызовы (см. секции выше).
 
 ═══════════════════════════════════════════════════════════════════════
   Исключения и предупреждения

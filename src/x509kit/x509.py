@@ -46,7 +46,6 @@ import warnings as _warnings
 
 __version__ = "0.7.0"
 
-
 # ======================================================================
 #  Исключения
 # ======================================================================
@@ -54,7 +53,6 @@ __version__ = "0.7.0"
 class X509Error(Exception):        pass
 class X509ParseError(X509Error):   pass
 class X509VerifyError(X509Error):  pass
-
 
 class X509Warning(UserWarning):
     """Не-фатальная проблема: код работает, но что-то подозрительно.
@@ -68,21 +66,19 @@ class X509Warning(UserWarning):
     """
     pass
 
-
 def _warn(what, how=None, stacklevel=3):
     if how:
         what = what + "  (подсказка: " + how + ")"
     _warnings.warn(what, X509Warning, stacklevel=stacklevel)
 
-
 def _check_rsa_key(key, context):
-    """RSA-ключ < 2048 бит — предупреждение."""
-    if isinstance(key, RSAKeys) and key.weak:
-        _warn(
-            f"{context}: RSA-ключ {key.size_bits} бит слишком слаб",
-            "нужно >= 2048 бит для production",
-        )
+    """DEPRECATED. Оставлено для обратной совместимости.
 
+    Предупреждение о слабом RSA-ключе выдаётся один раз в
+    RSAKeys.__init__ — при создании объекта. Все внешние вызовы
+    этой функции становятся no-op, чтобы не дублировать warning.
+    """
+    return
 
 def _check_hash(hash_name, context):
     """SHA-1 / MD5 — предупреждение."""
@@ -91,7 +87,6 @@ def _check_hash(hash_name, context):
             f"{context}: слабый хэш {hash_name}",
             "используй sha256, sha384 или sha512",
         )
-
 
 def _check_san_value(kind, value, context):
     """Пустой или слишком длинный SAN — предупреждение."""
@@ -105,7 +100,6 @@ def _check_san_value(kind, value, context):
             f"{context}: {kind} длиной {len(value)} — слишком длинное",
             "RFC 5280 ограничивает dNSName 253 символами",
         )
-
 
 # ======================================================================
 #  ASN.1 / DER
@@ -132,7 +126,6 @@ _MAX_DEPTH = 32
 _MAX_PEM_SIZE = 1 * 1024 * 1024   # 1 MB (base64 от 512 KB DER + запас)
 _MAX_DER_SIZE = 512 * 1024   # 512 KB (макс. реального X.509 ~50 KB)
 
-
 def _safe_parse(func):
     """Превращает TypeError/AttributeError/IndexError/ValueError/KeyError
     в X509ParseError. Защищает парсеры от крашей на битых DER.
@@ -154,7 +147,6 @@ def _safe_parse(func):
                 f"{type(e).__name__}: {e}"
             ) from None
     return wrapper
-
 
 class ASN1:
     __slots__ = ("tag", "value", "children", "raw")
@@ -232,17 +224,14 @@ class ASN1:
         except UnicodeDecodeError:
             return v.decode("latin-1", "replace")
 
-
 def _der_len(n: int) -> bytes:
     if n < 0x80:
         return bytes([n])
     b = n.to_bytes((n.bit_length() + 7) // 8, "big")
     return bytes([0x80 | len(b)]) + b
 
-
 def _der_tlv(tag: int, content: bytes) -> bytes:
     return bytes([tag]) + _der_len(len(content)) + content
-
 
 def der_int(n: int) -> bytes:
     if n < 0:
@@ -254,7 +243,6 @@ def der_int(n: int) -> bytes:
         b = b"\x00" + b
     return _der_tlv(TAG_INTEGER, b)
 
-
 def der_seq(*parts): return _der_tlv(TAG_SEQUENCE, b"".join(parts))
 def der_set(*parts): return _der_tlv(TAG_SET, b"".join(parts))
 def der_null():      return _der_tlv(TAG_NULL, b"")
@@ -264,7 +252,6 @@ def der_bitstring(data, unused=0):
     if not (0 <= unused <= 7):
         raise ValueError("bad unused bits count")
     return _der_tlv(TAG_BIT_STRING, bytes([unused]) + data)
-
 
 # ======================================================================
 #  OID
@@ -290,7 +277,6 @@ def decode_oid(data: bytes) -> str:
     else:            head = (2, first - 80)
     return ".".join(str(x) for x in (head + tuple(parts[1:])))
 
-
 def encode_oid(oid: str) -> bytes:
     parts = [int(x) for x in oid.split(".")]
     if len(parts) < 2:
@@ -312,7 +298,6 @@ def encode_oid(oid: str) -> bytes:
         for i in range(len(stack) - 1, -1, -1):
             body.append(stack[i] | (0x80 if i else 0))
     return _der_tlv(TAG_OID, bytes(body))
-
 
 OID_RSA_ENCRYPTION = "1.2.840.113549.1.1.1"
 OID_ED25519        = "1.3.101.112"
@@ -362,7 +347,6 @@ KNOWN_EXTENSION_OIDS = {
     OID_AIA,
     OID_SCT,
 }
-
 
 EXT_NAMES = {
     "2.5.29.17":         "X509v3 Subject Alternative Name",
@@ -457,7 +441,6 @@ _DIGEST_INFO_PREFIX = {
     "sha512": bytes.fromhex("3051300d060960864801650304020305000440"),
 }
 
-
 # ---- RSA-PSS (RFC 8017 §8.1) ----
 
 OID_RSA_PSS = "1.2.840.113549.1.1.10"
@@ -472,13 +455,11 @@ _HASH_OIDS = {
 }
 _HASH_OIDS_REV = {v: k for k, v in _HASH_OIDS.items()}
 
-
 # ======================================================================
 #  Name
 # ======================================================================
 
 _DN_ESCAPE = set(',+"\\<>;')
-
 
 def _escape_dn(v: str) -> str:
     if not v:
@@ -490,7 +471,6 @@ def _escape_dn(v: str) -> str:
         elif ch == "#" and i == 0:    out.append("\\#")
         else:                          out.append(ch)
     return "".join(out)
-
 
 def _unescape_dn(s: str) -> str:
     """RFC 4514: убрать escape-последовательности в значении DN."""
@@ -505,7 +485,6 @@ def _unescape_dn(s: str) -> str:
         i += 1
     return "".join(out)
 
-
 def _encode_rdn(short_or_oid: str, value: str) -> bytes:
     oid = ATTR_OIDS.get(short_or_oid, short_or_oid)
     if not isinstance(value, str):
@@ -519,7 +498,6 @@ def _encode_rdn(short_or_oid: str, value: str) -> bytes:
     val_der = (_der_tlv(TAG_PRINTABLE_STRING, ascii_bytes) if use_printable
                else _der_tlv(TAG_UTF8_STRING, value.encode("utf-8")))
     return der_set(der_seq(encode_oid(oid), val_der))
-
 
 class Name:
     __slots__ = ("rdns", "raw")
@@ -588,11 +566,9 @@ class Name:
         """Алиас для name_matches."""
         return self.name_matches(other)
 
-
 # ======================================================================
 #  AlgorithmIdentifier
 # ======================================================================
-
 
     def __eq__(self, other):
         return isinstance(other, Name) and self.raw == other.raw
@@ -705,7 +681,6 @@ class AlgorithmIdentifier:
     def __repr__(self):
         return f"<AlgId {self.oid}>"
 
-
 # ======================================================================
 #  RSAKeys — blinding + CRT
 # ======================================================================
@@ -715,7 +690,6 @@ _SMALL_PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47,
 
 RSA_MIN_GENERATE_BITS = 2048
 RSA_WEAK_BITS         = 2048
-
 
 def _is_probable_prime(n, rounds=32):
     if n < 2:
@@ -739,13 +713,11 @@ def _is_probable_prime(n, rounds=32):
             return False
     return True
 
-
 def _rand_prime(bits):
     while True:
         n = secrets.randbits(bits) | (1 << (bits - 1)) | 1
         if _is_probable_prime(n):
             return n
-
 
 # ---- RSA-PSS: MGF1 + EMSA-PSS ----
 
@@ -758,7 +730,6 @@ def _mgf1(seed, length, hash_name):
         out += hashlib.new(hash_name, seed + counter.to_bytes(4, "big")).digest()
         counter += 1
     return bytes(out[:length])
-
 
 def _emsa_pss_encode(msg, em_bits, hash_name, salt_len):
     """EMSA-PSS-ENCODE (RFC 8017 §9.1.1)."""
@@ -778,7 +749,6 @@ def _emsa_pss_encode(msg, em_bits, hash_name, salt_len):
     if unused_bits > 0:
         masked_db = bytes([masked_db[0] & (0xFF >> unused_bits)]) + masked_db[1:]
     return masked_db + h_val + b"\xbc"
-
 
 def _emsa_pss_verify(msg, em, em_bits, hash_name, salt_len):
     """EMSA-PSS-VERIFY (RFC 8017 §9.1.2)."""
@@ -808,7 +778,6 @@ def _emsa_pss_verify(msg, em, em_bits, hash_name, salt_len):
     h_prime = hashlib.new(hash_name, b"\x00" * 8 + m_hash + salt).digest()
     return hmac.compare_digest(h_prime, h_val)
 
-
 def _build_pss_alg_id(hash_name, salt_len=None):
     """AlgorithmIdentifier для RSASSA-PSS."""
     if salt_len is None:
@@ -822,7 +791,6 @@ def _build_pss_alg_id(hash_name, salt_len=None):
     salt_alg = _der_tlv(0xA2, der_int(salt_len))
     params = der_seq(hash_alg, mgf_alg, salt_alg)
     return der_seq(encode_oid(OID_RSA_PSS), params)
-
 
 def _parse_pss_params(params_node):
     """Из AlgorithmIdentifier.params → (hash_name, salt_len)."""
@@ -851,13 +819,59 @@ def _parse_pss_params(params_node):
             salt_len = child.children[0].as_int()
     return (hash_name, salt_len)
 
+def _validate_rsa_pub(n, e, context):
+    """Отвергнуть n=0, e=0, e=1, e even.
+
+    Zero public key attack: pow(m, e, n) с e=1 даёт sig = m,
+    с n=0 бросает ZeroDivisionError, с e=0 даёт 1.
+    """
+    if n <= 0:
+        _fail(
+            f"{context}: n <= 0",
+            "нулевой/отрицательный модуль — невалидный RSA-ключ",
+        )
+    if e <= 0:
+        _fail(
+            f"{context}: e <= 0",
+            "нулевая/отрицательная экспонента — невалидный RSA-ключ",
+        )
+    if e < 3 or (e & 1) == 0:
+        _fail(
+            f"{context}: e={e} недопустима",
+            "e должен быть нечётным и >= 3 (стандарт — 65537)",
+        )
+
 class RSAKeys:
     __slots__ = ("n", "e", "d", "p", "q", "dp", "dq", "qinv")
 
-    def __init__(self, n, e, d=None, p=None, q=None, dp=None, dq=None, qinv=None):
+    def __init__(self, n, e, d=None, p=None, q=None, dp=None, dq=None, qinv=None,
+                 _warn_weak=True):
+        if not isinstance(n, int) or not isinstance(e, int):
+            raise TypeError("RSAKeys: n and e must be int")
+        if n <= 0 or e <= 0:
+            raise X509Error(
+                "RSAKeys: n и e должны быть положительными. "
+                "n=0 или e=0 — невалидный ключ (zero public key attack)."
+            )
+        if e < 3 or (e & 1) == 0:
+            raise X509Error(
+                f"RSAKeys: недопустимая публичная экспонента e={e}. "
+                "e должен быть нечётным и >= 3."
+            )
         self.n = n; self.e = e; self.d = d
         self.p = p; self.q = q
         self.dp = dp; self.dq = dq; self.qinv = qinv
+
+        # Предупреждаем один раз на пользовательское создание.
+        # При парсинге уже существующих сертификатов/CSR (_warn_weak=False)
+        # не дублируем — пользователь уже получил warning при явном
+        # создании ключа, а Cert/CSR парсинг идёт «внутренним» путём.
+        if _warn_weak and self.n.bit_length() < RSA_WEAK_BITS:
+            _warn(
+                f"RSAKeys: RSA-ключ {self.n.bit_length()} бит слишком слаб",
+                "нужно >= 2048 бит для production",
+                stacklevel=3,
+            )
 
     @property
     def is_private(self): return self.d is not None
@@ -896,7 +910,62 @@ class RSAKeys:
                        qinv=pow(q, -1, p))
 
     @classmethod
-    def from_public_der(cls, der):
+    def from_public_bytes(cls, data, *, fmt="spki", _warn_weak=True):
+        """RSA public key из DER-байт.
+
+        У RSA нет «сырых» байт как у Ed25519/ECDSA — есть два DER-формата:
+
+          fmt="spki"   (default) — SubjectPublicKeyInfo (RFC 5280),
+              как в PEM "PUBLIC KEY"
+          fmt="pkcs1"            — PKCS#1 RSAPublicKey (RFC 8017),
+              как в PEM "RSA PUBLIC KEY"
+
+        Отличие от from_public_der: здесь можно указать формат явно,
+        не полагаясь на авто-определение.
+
+        Пример:
+            key = RSAKeys.from_public_bytes(spki_der)
+            key = RSAKeys.from_public_bytes(pkcs1_der, fmt="pkcs1")
+        """
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError(
+                f"RSAKeys.from_public_bytes: нужен bytes, "
+                f"получен {type(data).__name__}"
+            )
+        data = bytes(data)
+        if fmt not in ("spki", "pkcs1"):
+            _fail(
+                f"RSAKeys.from_public_bytes: неизвестный fmt={fmt!r}.",
+                "используй 'spki' (SubjectPublicKeyInfo) или 'pkcs1' "
+                "(RSAPublicKey)",
+            )
+        if fmt == "pkcs1":
+            node, _ = ASN1.parse(data)
+            if node.tag != TAG_SEQUENCE or len(node.children) < 2:
+                _fail(
+                    "RSAKeys.from_public_bytes: не PKCS#1 RSAPublicKey.",
+                    "pkcs1 = SEQUENCE { n INTEGER, e INTEGER }",
+                )
+            n = node.children[0].as_uint()
+            e = node.children[1].as_uint()
+            _validate_rsa_pub(n, e, "RSAKeys.from_public_bytes")
+            return cls(n=n, e=e, _warn_weak=_warn_weak)
+        # spki — как from_public_der, но с явной проверкой
+        node, _ = ASN1.parse(data)
+        if (node.tag == TAG_SEQUENCE and len(node.children) == 2
+                and node.children[0].tag == TAG_SEQUENCE
+                and node.children[1].tag == TAG_BIT_STRING):
+            bits = node.children[1].value
+            if not bits or bits[0] != 0:
+                raise X509ParseError("bad BIT STRING in SPKI")
+            return cls.from_public_der(bits[1:], _warn_weak=_warn_weak)
+        _fail(
+            "RSAKeys.from_public_bytes(fmt='spki'): не SubjectPublicKeyInfo.",
+            "spki = SEQUENCE { AlgorithmIdentifier, BIT STRING }",
+        )
+
+    @classmethod
+    def from_public_der(cls, der, _warn_weak=True):
         node, _ = ASN1.parse(der)
         if (node.tag == TAG_SEQUENCE and len(node.children) == 2
                 and node.children[0].tag == TAG_SEQUENCE
@@ -904,15 +973,16 @@ class RSAKeys:
             bits = node.children[1].value
             if not bits or bits[0] != 0:
                 raise X509ParseError("bad BIT STRING in SPKI")
-            return cls.from_public_der(bits[1:])
+            return cls.from_public_der(bits[1:], _warn_weak=_warn_weak)
         if node.tag != TAG_SEQUENCE or len(node.children) < 2:
             raise X509ParseError("not a PKCS#1 RSAPublicKey")
-        k = cls(n=node.children[0].as_uint(), e=node.children[1].as_uint())
-        _check_rsa_key(k, "RSAKeys.from_public_der")
-        return k
+        n = node.children[0].as_uint()
+        e = node.children[1].as_uint()
+        _validate_rsa_pub(n, e, "RSAKeys.from_public_der")
+        return cls(n=n, e=e, _warn_weak=_warn_weak)
 
     @classmethod
-    def from_private_der(cls, der):
+    def from_private_der(cls, der, _warn_weak=True):
         node, _ = ASN1.parse(der)
         if (node.tag == TAG_SEQUENCE and len(node.children) == 3
                 and node.children[0].tag == TAG_INTEGER
@@ -924,10 +994,11 @@ class RSAKeys:
             raise X509ParseError("not a PKCS#1 RSAPrivateKey")
         return cls(n=ch[1].as_uint(), e=ch[2].as_uint(), d=ch[3].as_uint(),
                    p=ch[4].as_uint(), q=ch[5].as_uint(),
-                   dp=ch[6].as_uint(), dq=ch[7].as_uint(), qinv=ch[8].as_uint())
+                   dp=ch[6].as_uint(), dq=ch[7].as_uint(), qinv=ch[8].as_uint(),
+                   _warn_weak=_warn_weak)
 
     @classmethod
-    def from_pem(cls, data, private=False, password=None):
+    def from_pem(cls, data, private=False, password=None, _warn_weak=True):
         if isinstance(data, str): data = data.encode("ascii")
         want = {"PRIVATE KEY", "RSA PRIVATE KEY"} if private else {"PUBLIC KEY", "RSA PUBLIC KEY"}
         for label, der in pem_decode(data):
@@ -937,9 +1008,11 @@ class RSAKeys:
                         "PEM зашифрован, нужен password",
                         )
                 der = _pkcs8_decrypt(der, password)
-                return cls.from_private_der(der)
+                return cls.from_private_der(der, _warn_weak=_warn_weak)
             if label in want:
-                return cls.from_private_der(der) if private else cls.from_public_der(der)
+                if private:
+                    return cls.from_private_der(der, _warn_weak=_warn_weak)
+                return cls.from_public_der(der, _warn_weak=_warn_weak)
         raise X509ParseError(f"no {'private' if private else 'public'} RSA key in PEM")
 
     def to_public_der(self):
@@ -1067,7 +1140,6 @@ class RSAKeys:
         self.d = 0; self.p = 0; self.q = 0
         self.dp = 0; self.dq = 0; self.qinv = 0
 
-
     def to_pkcs12(self, cert, chain=None, password="", name=None,
                   iterations=2048, cipher="aes-256-cbc"):
         """Упаковать этот ключ + сертификат (+цепочку) в PKCS#12.
@@ -1088,11 +1160,9 @@ class RSAKeys:
             b.set_cipher(cipher)
         return b.build()
 
-
 # ======================================================================
 #  Ed25519Keys (RFC 8032)
 # ======================================================================
-
 
     def __eq__(self, other):
         return (isinstance(other, RSAKeys)
@@ -1108,7 +1178,6 @@ _ED_Bx = 15112221349535400772501151409588531511454012693041857206046113283949847
 _ED_By = 46316835694926478169428394003475163141307993866256225615783033603165251855960
 _ED_B = (_ED_Bx, _ED_By, 1, _ED_Bx * _ED_By % _ED_P)
 
-
 def _ed_add(P, Q):
     X1, Y1, Z1, T1 = P
     X2, Y2, Z2, T2 = Q
@@ -1118,7 +1187,6 @@ def _ed_add(P, Q):
     D = Z1 * 2 * Z2 % _ED_P
     E, F, G, H = B - A, D - C, D + C, B + A
     return (E * F % _ED_P, G * H % _ED_P, F * G % _ED_P, E * H % _ED_P)
-
 
 def _ed_dbl(P):
     X1, Y1, Z1, _ = P
@@ -1132,7 +1200,6 @@ def _ed_dbl(P):
     H = D - B
     return (E * F % _ED_P, G * H % _ED_P, F * G % _ED_P, E * H % _ED_P)
 
-
 def _ed_mul(k, P):
     R = (0, 1, 1, 0)
     while k:
@@ -1142,14 +1209,12 @@ def _ed_mul(k, P):
         k >>= 1
     return R
 
-
 def _ed_encode(P):
     X, Y, Z, _ = P
     zi = pow(Z, -1, _ED_P)
     x = X * zi % _ED_P
     y = Y * zi % _ED_P
     return (y | ((x & 1) << 255)).to_bytes(32, "little")
-
 
 def _ed_recover_x(y, sign):
     if y >= _ED_P:
@@ -1171,7 +1236,6 @@ def _ed_recover_x(y, sign):
         x = _ED_P - x
     return x
 
-
 def _ed_decode(data):
     if len(data) != 32:
         return None
@@ -1182,17 +1246,42 @@ def _ed_decode(data):
         return None
     return (x, y, 1, x * y % _ED_P)
 
+def _ed_is_identity(P):
+    """P = (X, Y, Z, T) в расширенных координатах — это identity?
+
+    Projectively, (X:Y:Z:T) представляет (X/Z, Y/Z). Identity = (0, 1).
+    Значит identity ⇔ X ≡ 0 (mod p) и Y ≡ Z (mod p).
+    """
+    X, Y, Z, _T = P
+    return (X % _ED_P == 0) and ((Y - Z) % _ED_P == 0)
+
+def _ed_has_small_order(pub_bytes):
+    """True, если pub — точка малого порядка (1, 2, 4 или 8).
+
+    Уязвимость zero public key:
+    если A имеет порядок, делящий кофактор 8, то [k]A пробегает
+    маленькое множество. Для A = identity (b'\\x01' + b'\\x00'*31)
+    уравнение проверки Ed25519 ([S]B = R + [k]A) сводится к
+    [S]B = R, что позволяет подделать подпись без знания ключа.
+
+    Проверка: [8]A == identity. Кофактор кривой Ed25519 = 8,
+    L — простое, поэтому 8-кручение исчерпывается этими точками.
+    """
+    if len(pub_bytes) != 32:
+        return True
+    A = _ed_decode(pub_bytes)
+    if A is None:
+        return True     # вообще не точка на кривой
+    return _ed_is_identity(_ed_mul(8, A))
 
 def _ed_clamp(h):
     a = bytearray(h[:32])
     a[0] &= 248; a[31] &= 127; a[31] |= 64
     return int.from_bytes(a, "little")
 
-
 def _ed_pubkey(seed):
     h = hashlib.sha512(seed).digest()
     return _ed_encode(_ed_mul(_ed_clamp(h), _ED_B))
-
 
 def _ed_sign(seed, msg):
     h = hashlib.sha512(seed).digest()
@@ -1205,9 +1294,11 @@ def _ed_sign(seed, msg):
     S = (r + k * a) % _ED_Q
     return R + S.to_bytes(32, "little")
 
-
 def _ed_verify(pub, msg, sig):
     if len(sig) != 64 or len(pub) != 32:
+        return False
+    # Zero public key / малый порядок A: подпись подделывается без ключа.
+    if _ed_has_small_order(pub):
         return False
     A = _ed_decode(pub)
     if A is None:
@@ -1219,12 +1310,15 @@ def _ed_verify(pub, msg, sig):
     R = _ed_decode(R_enc)
     if R is None:
         return False
+    # R тоже должен быть не малого порядка (иначе подпись принимается
+    # при подобранном k ≡ 0 mod order(A))
+    if _ed_has_small_order(R_enc):
+        return False
     k = int.from_bytes(hashlib.sha512(R_enc + pub + msg).digest(), "little") % _ED_Q
     SB = _ed_mul(S, _ED_B)
     RkA = _ed_add(R, _ed_mul(k, A))
     return ((SB[0] * RkA[2] - RkA[0] * SB[2]) % _ED_P == 0 and
             (SB[1] * RkA[2] - RkA[1] * SB[2]) % _ED_P == 0)
-
 
 class Ed25519Keys:
     __slots__ = ("seed", "pub")
@@ -1238,8 +1332,17 @@ class Ed25519Keys:
         elif pub is not None:
             if len(pub) != 32:
                 raise X509Error("Ed25519 pub must be 32 bytes")
+            pub_b = bytes(pub)
+            if _ed_has_small_order(pub_b):
+                _fail(
+                    "Ed25519Keys: публичный ключ — точка малого порядка.",
+                    "нулевые байты (b'\\x00'*32), единица "
+                    "(b'\\x01' + b'\\x00'*31) и другие точки порядка "
+                    "1/2/4/8 позволяют подделать подпись без знания "
+                    "приватного ключа. Такой ключ невалиден."
+                )
             self.seed = None
-            self.pub = bytes(pub)
+            self.pub = pub_b
         else:
             raise ValueError("need seed or pub")
 
@@ -1283,6 +1386,26 @@ class Ed25519Keys:
                 raise X509ParseError("bad BIT STRING in Ed25519 SPKI")
             return cls(pub=bits[1:])
         raise X509ParseError("not an Ed25519 public key")
+
+    @classmethod
+    def from_public_bytes(cls, data):
+        """Ed25519 public key из 32 сырых байт (RFC 8032 §5.1.2).
+
+        Пример:
+            pub = Ed25519Keys.from_public_bytes(b"\x00" * 32)
+        """
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError(
+                f"Ed25519Keys.from_public_bytes: нужен bytes, "
+                f"получен {type(data).__name__}"
+            )
+        if len(data) != 32:
+            _fail(
+                f"Ed25519Keys.from_public_bytes: нужно 32 байта, "
+                f"получено {len(data)}.",
+                "RFC 8032: Ed25519 public key — ровно 32 байта",
+            )
+        return cls(pub=bytes(data))
 
     @classmethod
     def from_private_der(cls, der):
@@ -1334,7 +1457,6 @@ class Ed25519Keys:
     def wipe(self):
         self.seed = None
 
-
     def to_pkcs12(self, cert, chain=None, password="", name=None,
                   iterations=2048, cipher="aes-256-cbc"):
         """Упаковать этот ключ + сертификат (+цепочку) в PKCS#12.
@@ -1355,11 +1477,9 @@ class Ed25519Keys:
             b.set_cipher(cipher)
         return b.build()
 
-
 # ======================================================================
 #  ECDSA — P-256, P-384, P-521, secp256k1
 # ======================================================================
-
 
     def __eq__(self, other):
         return isinstance(other, Ed25519Keys) and self.pub == other.pub
@@ -1409,7 +1529,6 @@ EC_CURVES = {
     },
 }
 
-
 def _ec_add(P, Q, a, p):
     if P is None:
         return Q
@@ -1427,7 +1546,6 @@ def _ec_add(P, Q, a, p):
     y3 = (lam * (x1 - x3) - y1) % p
     return (x3, y3)
 
-
 def _ec_mul(k, P, a, p):
     R = None
     while k:
@@ -1437,19 +1555,36 @@ def _ec_mul(k, P, a, p):
         k >>= 1
     return R
 
-
 def _ec_encode_point(P, size):
     if P is None:
         return b"\x00"
     x, y = P
     return b"\x04" + x.to_bytes(size, "big") + y.to_bytes(size, "big")
 
-
 def _ec_decode_point(data, curve):
+    """Декодировать SEC1-точку (X9.62 §4.3.6). Возвращает (x, y) или None.
+
+    Отвергает:
+      * пустой ввод и неверную длину;
+      * 0x00 — SEC1-кодировка точки бесконечности;
+      * (0, 0) — никогда не валидная аффинная точка на NIST-кривых
+        (b != 0), но защищаемся явно;
+      * координаты вне поля;
+      * точки, не лежащие на кривой: y^2 == x^3 + ax + b (mod p).
+
+    Раньше проверка уравнения кривой выполнялась только для сжатых
+    точек, а uncompressed 0x04||X||Y принимался без проверки — это
+    позволяло подать (0,0) или произвольные (X,Y) как «публичный
+    ключ» (invalid curve point attack).
+    """
     size = curve["size"]
     if not data:
         return None
     tag = data[0]
+    if tag == 0x00:
+        # SEC1 §2.3.3: единственный байт 0x00 = точка бесконечности.
+        return None
+    p = curve["p"]; a = curve["a"]; b = curve["b"]
     if tag == 0x04:                        # uncompressed
         if len(data) != 1 + 2 * size:
             return None
@@ -1459,7 +1594,6 @@ def _ec_decode_point(data, curve):
         if len(data) != 1 + size:
             return None
         x = int.from_bytes(data[1:], "big")
-        p = curve["p"]; a = curve["a"]; b = curve["b"]
         y2 = (pow(x, 3, p) + a * x + b) % p
         y = pow(y2, (p + 1) // 4, p) if p % 4 == 3 else None
         if y is None:
@@ -1470,19 +1604,25 @@ def _ec_decode_point(data, curve):
             y = p - y
     else:
         return None
-    return (x, y)
 
+    # Явные sanity-проверки
+    if not (0 <= x < p and 0 <= y < p):
+        return None
+    if x == 0 and y == 0:
+        return None
+    # Curve equation: y^2 == x^3 + ax + b (mod p)
+    if (y * y - (x * x * x + a * x + b)) % p != 0:
+        return None
+    return (x, y)
 
 def _encode_ecdsa_sig(r, s):
     return der_seq(der_int(r), der_int(s))
-
 
 def _parse_ecdsa_sig(data):
     node, _ = ASN1.parse(data)
     if node.tag != TAG_SEQUENCE or len(node.children) != 2:
         raise X509ParseError("bad ECDSA-Sig-Value")
     return node.children[0].as_uint(), node.children[1].as_uint()
-
 
 # ---- RFC 6979: deterministic k for ECDSA ----
 
@@ -1493,16 +1633,13 @@ def _bits2int(b, qlen):
         v >>= (blen - qlen)
     return v
 
-
 def _int2octets(v, rolen):
     return v.to_bytes(rolen, "big")
-
 
 def _bits2octets(b, q, qlen, rolen):
     z1 = _bits2int(b, qlen)
     z2 = z1 % q
     return _int2octets(z2, rolen)
-
 
 def _rfc6979_generate_k(x, h1, q, hash_name):
     """RFC 6979 §3.2 — HMAC-DRBG k."""
@@ -1530,7 +1667,6 @@ def _rfc6979_generate_k(x, h1, q, hash_name):
         K = hmac.new(K, V + b"\x00", hash_name).digest()
         V = hmac.new(K, V, hash_name).digest()
 
-
 class ECDSAKeys:
     """ECDSA (P-256/P-384/P-521/secp256k1)."""
 
@@ -1552,6 +1688,33 @@ class ECDSAKeys:
             if self.point is None:
                 raise X509Error("bad private scalar")
         elif point is not None:
+            if not isinstance(point, tuple) or len(point) != 2:
+                _fail(
+                    "ECDSAKeys: point должен быть tuple (x, y).",
+                    "передай аффинные координаты: point=(x, y)",
+                )
+            x, y = point
+            pc = curve["p"]; ac = curve["a"]; bc = curve["b"]
+            if not (isinstance(x, int) and isinstance(y, int)):
+                _fail(
+                    "ECDSAKeys: координаты точки должны быть int.",
+                    "point=(int_x, int_y)",
+                )
+            if not (0 <= x < pc and 0 <= y < pc):
+                _fail(
+                    "ECDSAKeys: координаты точки вне поля.",
+                    "0 <= x, y < p",
+                )
+            if x == 0 and y == 0:
+                _fail(
+                    "ECDSAKeys: point=(0,0) — невалидная точка.",
+                    "точка бесконечности кодируется как None, не (0,0)",
+                )
+            if (y * y - (x * x * x + ac * x + bc)) % pc != 0:
+                _fail(
+                    "ECDSAKeys: точка не лежит на кривой.",
+                    f"проверь x, y для {curve.get('name', curve_oid)}",
+                )
             self.d = None
             self.point = point
         else:
@@ -1602,6 +1765,55 @@ class ECDSAKeys:
         )
         alg = der_seq(encode_oid(OID_EC_PUBLIC_KEY), encode_oid(self.curve_oid))
         return der_seq(der_int(0), alg, der_octet(inner))
+
+    @classmethod
+    def from_public_bytes(cls, data, curve="P-256"):
+        """ECDSA public key из SEC1-представления точки (X9.62 §4.3.6).
+
+        Поддерживает:
+          * несжатый:  0x04 || X || Y (1 + 2*size байт)
+          * сжатый:    0x02/0x03 || X (1 + size байт)
+
+        curve — 'P-256' | 'P-384' | 'P-521' | 'secp256k1'.
+
+        Пример:
+            key = ECDSAKeys.from_public_bytes(sec1_bytes, curve="P-256")
+        """
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError(
+                f"ECDSAKeys.from_public_bytes: нужен bytes, "
+                f"получен {type(data).__name__}"
+            )
+        curve_oid = {
+            "P-256":     OID_PRIME256V1,
+            "P-384":     OID_SECP384R1,
+            "P-521":     OID_SECP521R1,
+            "secp256k1": OID_SECP256K1,
+        }.get(curve)
+        if curve_oid is None:
+            _fail(
+                f"ECDSAKeys.from_public_bytes: неизвестная кривая {curve!r}.",
+                "используй P-256 / P-384 / P-521 / secp256k1",
+            )
+        c = EC_CURVES[curve_oid]
+        data = bytes(data)
+        expected_uncompressed = 1 + 2 * c["size"]
+        expected_compressed = 1 + c["size"]
+        if len(data) not in (expected_uncompressed, expected_compressed):
+            _fail(
+                f"ECDSAKeys.from_public_bytes: {curve} ожидает "
+                f"{expected_uncompressed} (uncompressed) или "
+                f"{expected_compressed} (compressed) байт, "
+                f"получено {len(data)}.",
+                "X9.62 SEC1: 0x04||X||Y или 0x02/0x03||X",
+            )
+        pt = _ec_decode_point(data, c)
+        if pt is None:
+            _fail(
+                f"ECDSAKeys.from_public_bytes: точка не на кривой {curve}.",
+                "проверь байты — возможно, повреждены или не та кривая",
+            )
+        return cls(curve_oid, point=pt)
 
     @classmethod
     def from_public_der(cls, der):
@@ -1745,7 +1957,6 @@ class ECDSAKeys:
     def wipe(self):
         self.d = None
 
-
     def to_pkcs12(self, cert, chain=None, password="", name=None,
                   iterations=2048, cipher="aes-256-cbc"):
         """Упаковать этот ключ + сертификат (+цепочку) в PKCS#12.
@@ -1766,11 +1977,9 @@ class ECDSAKeys:
             b.set_cipher(cipher)
         return b.build()
 
-
 # ======================================================================
 #  SPKI
 # ======================================================================
-
 
     def __eq__(self, other):
         return (isinstance(other, ECDSAKeys)
@@ -1788,7 +1997,10 @@ def _parse_spki(node):
         raise X509ParseError("SPKI BIT STRING must have zero unused bits")
     key_data = bits_node.value[1:]
     if alg.oid == OID_RSA_ENCRYPTION:
-        return RSAKeys.from_public_der(key_data), alg.oid, node.raw
+        # Cert/CSR/CRL-парсинг не должен дублировать warning о слабом
+        # ключе — пользователь уже предупреждён при явном создании.
+        return (RSAKeys.from_public_der(key_data, _warn_weak=False),
+                alg.oid, node.raw)
     if alg.oid == OID_ED25519:
         return Ed25519Keys(pub=key_data), alg.oid, node.raw
     if alg.oid == OID_EC_PUBLIC_KEY:
@@ -1804,7 +2016,6 @@ def _parse_spki(node):
         return ECDSAKeys(curve_oid, point=pt), alg.oid, node.raw
     return ("raw", alg.oid, key_data), alg.oid, node.raw
 
-
 # ======================================================================
 #  Extensions
 # ======================================================================
@@ -1814,7 +2025,6 @@ KU_BITS = {
     "dataEncipherment": 3, "keyAgreement": 4, "keyCertSign": 5,
     "cRLSign": 6, "encipherOnly": 7, "decipherOnly": 8,
 }
-
 
 def _parse_time(node):
     try:
@@ -1850,7 +2060,6 @@ def _enc_time(dt):
         return _der_tlv(TAG_UTC_TIME, dt.strftime("%y%m%d%H%M%SZ").encode("ascii"))
     return _der_tlv(TAG_GENERALIZED_TIME, dt.strftime("%Y%m%d%H%M%SZ").encode("ascii"))
 
-
 class Validity:
     __slots__ = ("not_before", "not_after")
 
@@ -1861,7 +2070,6 @@ class Validity:
 
     def __repr__(self):
         return f"<Validity {self.not_before.isoformat()} .. {self.not_after.isoformat()}>"
-
 
 class Extension:
     __slots__ = ("oid", "critical", "value")
@@ -1879,7 +2087,6 @@ class Extension:
 
     def __repr__(self):
         return f"<Extension {self.oid}{' critical' if self.critical else ''}>"
-
 
 def _parse_san(data):
     node, _ = ASN1.parse(data)
@@ -1907,7 +2114,6 @@ def _parse_san(data):
             out.append((f"tag0x{t:02x}", gn.value.hex()))
     return out
 
-
 def _parse_basic_constraints(data):
     node, _ = ASN1.parse(data)
     if node.tag != TAG_SEQUENCE:
@@ -1921,7 +2127,6 @@ def _parse_basic_constraints(data):
             raise X509ParseError("negative path_len")
     return is_ca, path_len
 
-
 def _parse_key_usage(data):
     node, _ = ASN1.parse(data)
     if node.tag != TAG_BIT_STRING or not node.value:
@@ -1934,7 +2139,6 @@ def _parse_key_usage(data):
             out.add(name)
     return out
 
-
 def _enc_basic_constraints(is_ca, path_len=None):
     parts = []
     if is_ca:
@@ -1944,7 +2148,6 @@ def _enc_basic_constraints(is_ca, path_len=None):
             raise ValueError("negative path_len")
         parts.append(der_int(path_len))
     return der_seq(*parts)
-
 
 def _enc_key_usage(names):
     names = list(names)
@@ -1962,14 +2165,12 @@ def _enc_key_usage(names):
     unused = nbytes * 8 - (max_bit + 1)
     return _der_tlv(TAG_BIT_STRING, bytes([unused]) + bytes(buf))
 
-
 def _enc_extension(oid, critical, value_der):
     parts = [encode_oid(oid)]
     if critical:
         parts.append(der_bool(True))
     parts.append(der_octet(value_der))
     return der_seq(*parts)
-
 
 def san_extension(*, dns_names=None, emails=None, ips=None, uris=None):
     parts = []
@@ -1989,7 +2190,6 @@ def san_extension(*, dns_names=None, emails=None, ips=None, uris=None):
         raise ValueError("SAN extension needs at least one name")
     return _enc_extension(OID_SAN, False, der_seq(*parts))
 
-
 # ---- SAN: отдельные типы GeneralName ----
 
 _SAN_TAG_EMAIL = 0x81   # [1] rfc822Name
@@ -1998,18 +2198,14 @@ _SAN_TAG_URI   = 0x86   # [6] URI
 _SAN_TAG_IP    = 0x87   # [7] iPAddress
 _SAN_TAG_DN    = 0xA4   # [4] directoryName (constructed)
 
-
 def _san_entry_dns(name):
     return (_SAN_TAG_DNS, name.encode("ascii"))
-
 
 def _san_entry_email(email):
     return (_SAN_TAG_EMAIL, email.encode("ascii"))
 
-
 def _san_entry_uri(uri):
     return (_SAN_TAG_URI, uri.encode("ascii"))
-
 
 def _san_entry_ip(ip):
     if isinstance(ip, (bytes, bytearray)):
@@ -2022,10 +2218,8 @@ def _san_entry_ip(ip):
         packed = socket.inet_pton(socket.AF_INET6, ip)
     return (_SAN_TAG_IP, packed)
 
-
 def _san_entry_dn(name_der):
     return (_SAN_TAG_DN, bytes(name_der))
-
 
 # ---- Информативные ошибки ----
 
@@ -2035,7 +2229,6 @@ def _fail(what, how=None):
         msg += f"\n  Как исправить: {how}"
     raise X509Error(msg)
 
-
 def _spki_pub_matches(spki_der, key):
     try:
         node, _ = ASN1.parse(spki_der)
@@ -2043,7 +2236,6 @@ def _spki_pub_matches(spki_der, key):
     except Exception:
         return True
     return _public_keys_equal(pub, key)
-
 
 def _is_ca_cert(cert):
     bc = cert.ext_get(OID_BASIC_CONSTR)
@@ -2054,7 +2246,6 @@ def _is_ca_cert(cert):
         return is_ca
     except Exception:
         return False
-
 
 # ---- SKI / AKI (RFC 5280 §4.2.1.2 / §4.2.1.1) ----
 
@@ -2071,7 +2262,6 @@ def _compute_ski(spki_der):
     except Exception:
         return None
 
-
 def _extract_ski(cert):
     """SubjectKeyIdentifier bytes(20) или None."""
     ext = cert.ext_get(OID_SUBJ_KEY_ID)
@@ -2084,7 +2274,6 @@ def _extract_ski(cert):
     except Exception:
         pass
     return None
-
 
 def _extract_aki(cert):
     """AuthorityKeyIdentifier keyIdentifier bytes или None."""
@@ -2101,7 +2290,6 @@ def _extract_aki(cert):
     except Exception:
         pass
     return None
-
 
 # ---- Extended Key Usage ----
 
@@ -2123,7 +2311,6 @@ def _enc_eku(names):
     body = der_seq(*[encode_oid(o) for o in oids])
     return _enc_extension(OID_EXT_KEY_USAGE, False, body)
 
-
 def _parse_eku(data):
     """Распарсить extnValue ExtendedKeyUsage → set имён или OID-строк."""
     node, _ = ASN1.parse(data)
@@ -2134,7 +2321,6 @@ def _parse_eku(data):
         oid = child.as_oid()
         out.add(EKU_OIDS_REV.get(oid, oid))
     return out
-
 
 # ---- Name Constraints (RFC 5280 §4.2.1.10) ----
 
@@ -2147,7 +2333,6 @@ def _enc_ip_subnet(cidr):
         _fail(f"Name Constraints: неверный IP/CIDR {cidr!r}: {e}",
               "пример: '10.0.0.0/8' или '2001:db8::/32'")
     return net.network_address.packed + net.netmask.packed
-
 
 def _parse_ip_subnet(data):
     """base||mask (8 или 32 байт) → CIDR-строка.
@@ -2183,7 +2368,6 @@ def _parse_ip_subnet(data):
         return f"{_ip.IPv6Address(base_int)}/{prefix}"
     raise X509ParseError(f"bad IP subnet length: {len(data)}")
 
-
 def _enc_general_subtree(kind, value):
     """Один GeneralSubtree."""
     if kind == "dns":
@@ -2195,7 +2379,6 @@ def _enc_general_subtree(kind, value):
     if kind == "ip":
         return der_seq(_der_tlv(0x87, _enc_ip_subnet(value)))
     raise ValueError(f"unknown NC kind: {kind}")
-
 
 def _enc_name_constraints(permitted, excluded):
     """NameConstraints extension (critical)."""
@@ -2213,7 +2396,6 @@ def _enc_name_constraints(permitted, excluded):
                 subs.append(_enc_general_subtree(kind, v))
         parts.append(_der_tlv(0xA1, der_seq(*subs)))
     return _enc_extension(OID_NAME_CONSTR, True, der_seq(*parts))
-
 
 def _parse_general_subtrees(node):
     """SEQUENCE OF GeneralSubtree → {kind: [values]}."""
@@ -2243,7 +2425,6 @@ def _parse_general_subtrees(node):
             continue
     return out
 
-
 def _parse_name_constraints(data):
     """extnValue → {'permitted': {...}, 'excluded': {...}}."""
     node, _ = ASN1.parse(data)
@@ -2257,14 +2438,12 @@ def _parse_name_constraints(data):
             result["excluded"] = _parse_general_subtrees(child.children[0])
     return result
 
-
 def _dns_in_subtree(name, base):
     name = name.lower().rstrip(".")
     base = base.lower().rstrip(".")
     if base.startswith("."):
         return name.endswith(base) and name != base[1:]
     return name == base or name.endswith("." + base)
-
 
 def _email_in_subtree(email, base):
     base = base.lower()
@@ -2273,7 +2452,6 @@ def _email_in_subtree(email, base):
         return email == base
     domain = email.rsplit("@", 1)[1] if "@" in email else email
     return _dns_in_subtree(domain, base)
-
 
 def _uri_in_subtree(uri, base):
     from urllib.parse import urlparse
@@ -2284,7 +2462,6 @@ def _uri_in_subtree(uri, base):
     if not host:
         return False
     return _dns_in_subtree(host, base)
-
 
 def _ip_in_subnet(ip_str, cidr):
     import ipaddress as _ip
@@ -2297,7 +2474,6 @@ def _ip_in_subnet(ip_str, cidr):
         return False
     return addr in net
 
-
 def _name_matches_constraint(kind, name, base):
     try:
         if kind == "dns":   return _dns_in_subtree(name, base)
@@ -2307,7 +2483,6 @@ def _name_matches_constraint(kind, name, base):
     except Exception:
         return False
     return False
-
 
 # ---- NC intersection (RFC 5280 §4.2.1.10) ----
 
@@ -2328,7 +2503,6 @@ def _dns_base_contains(outer, inner):
         return True
     return i_strip.endswith("." + o_strip)
 
-
 def _ip_base_contains(outer, inner):
     """True если IP-подсеть inner внутри outer."""
     import ipaddress as _ip
@@ -2345,7 +2519,6 @@ def _ip_base_contains(outer, inner):
         return i.network_address in o and i.netmask == i.netmask and \
                (int(i.network_address) & int(o.netmask)) == int(o.network_address)
 
-
 def _nc_base_contains(kind, outer, inner):
     """Универсально: поддерево inner внутри outer для указанного типа."""
     if kind == "dns" or kind == "email" or kind == "uri":
@@ -2353,7 +2526,6 @@ def _nc_base_contains(kind, outer, inner):
     if kind == "ip":
         return _ip_base_contains(outer, inner)
     return False
-
 
 def _nc_sub_constraint_of(child_nc, parent_nc):
     """True если child_nc ⊆ parent_nc (child строже или равен).
@@ -2389,7 +2561,6 @@ def _nc_sub_constraint_of(child_nc, parent_nc):
 
     return True, None
 
-
 def _check_name_constraints(names, nc):
     """names = [(kind, value)]; nc = parsed dict. Returns (ok, reason|None)."""
     permitted = nc.get("permitted", {})
@@ -2403,7 +2574,6 @@ def _check_name_constraints(names, nc):
             if not any(_name_matches_constraint(kind, value, b) for b in bases):
                 return False, f"{kind} '{value}' not within permitted {bases}"
     return True, None
-
 
 def _collect_names_from_san(san_list, subject_name):
     """[(kind,value)] из cert.san + CN."""
@@ -2420,7 +2590,6 @@ def _collect_names_from_san(san_list, subject_name):
         if cn and "." in cn:
             out.append(("dns", cn))
     return out
-
 
 def _collect_names_from_builder(builder):
     """Собирает имена из Builder (san_entries + extensions с OID_SAN + CN)."""
@@ -2448,7 +2617,6 @@ def _collect_names_from_builder(builder):
                 pass
     return _collect_names_from_san(san_list, builder._subject)
 
-
 # ---- AIA (Authority Information Access, RFC 5280 §4.2.2.1) ----
 
 def _enc_aia(ocsp=None, ca_issuers=None):
@@ -2475,7 +2643,6 @@ def _enc_aia(ocsp=None, ca_issuers=None):
         raise ValueError("AIA needs at least one URL")
     return _enc_extension(OID_AIA, False, der_seq(*entries))
 
-
 def _parse_aia(data):
     """extnValue → {'ocsp': [...], 'ca_issuers': [...]}."""
     node, _ = ASN1.parse(data)
@@ -2498,7 +2665,6 @@ def _parse_aia(data):
         elif method == OID_AD_CA_ISSUERS:
             out["ca_issuers"].append(url)
     return out
-
 
 # ---- Certificate Transparency (RFC 6962 §3.3) ----
 
@@ -2550,7 +2716,6 @@ def _parse_sct(entry: bytes) -> dict:
         "_signature_bytes": signature,
     }
 
-
 def _parse_sct_list(extn_value: bytes) -> list:
     """Разобрать содержимое CT-расширения.
 
@@ -2585,7 +2750,6 @@ def _parse_sct_list(extn_value: bytes) -> list:
         i += sct_len
     return out
 
-
 def _parse_key_id(v, context):
     """Принимает bytes/hex-строку, возвращает bytes."""
     if isinstance(v, (bytes, bytearray)):
@@ -2601,11 +2765,9 @@ def _parse_key_id(v, context):
         _fail(f"{context}: пустой key id")
     return b
 
-
 def _enc_ski_ext(key_id):
     """Extension SubjectKeyIdentifier: OCTET STRING внутри extnValue."""
     return _enc_extension(OID_SUBJ_KEY_ID, False, der_octet(key_id))
-
 
 def _enc_aki_ext(key_id):
     """Extension AuthorityKeyIdentifier: SEQUENCE { [0] KeyIdentifier }."""
@@ -2614,7 +2776,6 @@ def _enc_aki_ext(key_id):
         der_seq(_der_tlv(0x80, key_id)),
     )
 
-
 def _aki_ski_match(cert, issuer):
     """True если cert.aki == issuer.ski, либо у кого-то нет значения."""
     aki = _extract_aki(cert)
@@ -2622,7 +2783,6 @@ def _aki_ski_match(cert, issuer):
     if aki is None or ski is None:
         return True
     return aki == ski
-
 
 def _build_san_extension(entries):
     """Собрать одно SAN-расширение из списка (tag, value)."""
@@ -2636,11 +2796,9 @@ def _build_san_extension(entries):
             parts.append(_der_tlv(tag, value))
     return _enc_extension(OID_SAN, False, der_seq(*parts))
 
-
 # ======================================================================
 #  Cert
 # ======================================================================
-
 
 # ---- HTTP helpers для fetch_* ----
 
@@ -2654,7 +2812,6 @@ def _http_get(url, *, timeout=10, max_size=2 * 1024 * 1024):
     if len(data) > max_size:
         raise X509Error(f"_http_get: response too large (> {max_size} bytes)")
     return data
-
 
 def _http_post(url, body, *, content_type="application/octet-stream",
                timeout=10, max_size=2 * 1024 * 1024):
@@ -2670,7 +2827,6 @@ def _http_post(url, body, *, content_type="application/octet-stream",
     if len(data) > max_size:
         raise X509Error(f"_http_post: response too large (> {max_size} bytes)")
     return data
-
 
 def _materialize_cert_pem(obj, tmp_paths):
     """Привести cert/bundle/PEM/path к пути к PEM-файлу."""
@@ -2698,7 +2854,6 @@ def _materialize_cert_pem(obj, tmp_paths):
     tmp_paths.append(f.name)
     return f.name
 
-
 def _materialize_key_pem(obj, tmp_paths):
     """Привести key/PEM/path к пути к PEM-файлу."""
     import os as _os
@@ -2725,7 +2880,6 @@ def _materialize_key_pem(obj, tmp_paths):
     _os.chmod(f.name, 0o600)
     tmp_paths.append(f.name)
     return f.name
-
 
 class Cert:
     @_safe_parse
@@ -2797,10 +2951,6 @@ class Cert:
     def san(self):
         ext = self.ext_get(OID_SAN)
         return _parse_san(ext.value) if ext else []
-
-
-
-
 
     @property
     def dns_names(self):
@@ -3020,7 +3170,6 @@ class Cert:
                 lines.append(f"    - {kind}: {val}")
         return "\n".join(lines)
 
-
 # ======================================================================
 #  Сборка cert DER (используется и в CACert, и в Builder)
 # ======================================================================
@@ -3030,13 +3179,11 @@ class Cert:
 #  Единое место для sig_alg / sign / verify / сравнения публичных ключей.
 # ======================================================================
 
-
     def __eq__(self, other):
         return isinstance(other, Cert) and self.der == other.der
 
     def __hash__(self):
         return hash(self.der)
-
 
     @classmethod
     def from_url(cls, url, port=None, timeout=5, verify=False,
@@ -3290,13 +3437,96 @@ class Cert:
                 name = EXT_NAMES.get(ext.oid, ext.oid)
                 crit = " critical" if ext.critical else ""
                 lines.append(f"            {name}:{crit}")
-                v = ext.value
-                if v:
-                    hexed = v.hex()
-                    if len(hexed) > 64:
-                        lines.append(f"                {hexed[:64]}...")
-                    else:
-                        lines.append(f"                {hexed}")
+
+                # Пытаемся распечатать человеку понятно, как openssl x509 -text
+                printed = False
+
+                if ext.oid == OID_SAN:
+                    try:
+                        for kind, val in _parse_san(ext.value):
+                            lines.append(f"                {kind}:{val}")
+                        printed = True
+                    except Exception:
+                        pass
+
+                elif ext.oid == OID_KEY_USAGE:
+                    try:
+                        kus = sorted(_parse_key_usage(ext.value),
+                                     key=lambda n: KU_BITS.get(n, 99))
+                        if kus:
+                            lines.append("                " + ", ".join(kus))
+                        printed = True
+                    except Exception:
+                        pass
+
+                elif ext.oid == OID_BASIC_CONSTR:
+                    try:
+                        is_ca, pl = _parse_basic_constraints(ext.value)
+                        lines.append(f"                CA:{'TRUE' if is_ca else 'FALSE'}")
+                        if pl is not None:
+                            lines.append(f"                pathlen:{pl}")
+                        printed = True
+                    except Exception:
+                        pass
+
+                elif ext.oid == OID_EXT_KEY_USAGE:
+                    try:
+                        eku = sorted(_parse_eku(ext.value))
+                        if eku:
+                            lines.append("                " + ", ".join(eku))
+                        printed = True
+                    except Exception:
+                        pass
+
+                elif ext.oid == OID_SUBJ_KEY_ID:
+                    try:
+                        node, _ = ASN1.parse(ext.value)
+                        if node.tag == TAG_OCTET_STRING:
+                            h = node.value.hex()
+                            lines.append(f"                {h[:2]}:{h[2:4]}:"
+                                         f"{h[4:6]}:...:{h[-4:]}")
+                            printed = True
+                    except Exception:
+                        pass
+
+                elif ext.oid == OID_AUTH_KEY_ID:
+                    try:
+                        aki = _extract_aki(self)
+                        if aki is not None:
+                            h = aki.hex()
+                            lines.append(f"                keyid:{h[:2]}:"
+                                         f"{h[2:4]}:...:{h[-4:]}")
+                            printed = True
+                    except Exception:
+                        pass
+
+                elif ext.oid == OID_AIA:
+                    try:
+                        a = _parse_aia(ext.value)
+                        for url in a.get("ocsp", []):
+                            lines.append(f"                OCSP - URI:{url}")
+                        for url in a.get("ca_issuers", []):
+                            lines.append(f"                CA Issuers - URI:{url}")
+                        printed = True
+                    except Exception:
+                        pass
+
+                elif ext.oid == OID_CRL_DP:
+                    try:
+                        for url in self.crl_distribution_points:
+                            lines.append(f"                URI:{url}")
+                        printed = True
+                    except Exception:
+                        pass
+
+                if not printed:
+                    v = ext.value
+                    if v:
+                        hexed = v.hex()
+                        if len(hexed) > 64:
+                            lines.append(f"                {hexed[:64]}...")
+                        else:
+                            lines.append(f"                {hexed}")
 
         lines.append(f"    Signature Algorithm: {self.signature_algorithm_name}")
         sig_hex = self.signature.hex()
@@ -3304,7 +3534,6 @@ class Cert:
             lines.append(f"        {sig_hex[i:i+64]}")
 
         return "\n".join(lines)
-
 
 def _sign_and_build_alg(key, data, hash_name="sha256", sig_scheme="pkcs1v15"):
     """Подписать `data` и вернуть (AlgorithmIdentifier DER, signature bytes)."""
@@ -3344,7 +3573,6 @@ def _sign_and_build_alg(key, data, hash_name="sha256", sig_scheme="pkcs1v15"):
 
     return sig_alg, sig
 
-
 def _verify_signed_data(data, sig, sig_alg, key):
     """Единая проверка подписи по AlgorithmIdentifier + публичному ключу."""
     if sig_alg is None:
@@ -3372,7 +3600,6 @@ def _verify_signed_data(data, sig, sig_alg, key):
         return False
     return key.verify_pkcs1v15(data, sig, hash_name)
 
-
 def _public_keys_equal(a, b):
     if isinstance(a, RSAKeys) and isinstance(b, RSAKeys):
         return a.n == b.n and a.e == b.e
@@ -3381,7 +3608,6 @@ def _public_keys_equal(a, b):
     if isinstance(a, ECDSAKeys) and isinstance(b, ECDSAKeys):
         return a.curve_oid == b.curve_oid and a.point == b.point
     return False
-
 
 def _build_cert_der(*, serial, hash_name, issuer_der, subject_der,
                     not_before, not_after, spki_der, extensions,
@@ -3404,7 +3630,6 @@ def _build_cert_der(*, serial, hash_name, issuer_der, subject_der,
 
     _, sig = _sign_and_build_alg(signing_key, tbs, hash_name, sig_scheme)
     return der_seq(tbs, sig_alg, der_bitstring(sig))
-
 
 # ======================================================================
 #  CACert
@@ -3740,7 +3965,6 @@ class CACert(Cert):
     def __repr__(self):
         return f"<CACert subject={self.subject!r} path_len={self.path_len}>"
 
-
 # ======================================================================
 #  CSR
 # ======================================================================
@@ -3804,13 +4028,6 @@ class CSR:
             if e.oid == OID_SAN:
                 return _parse_san(e.value)
         return []
-
-
-
-
-
-
-
 
     @property
     def dns_names(self):
@@ -3886,11 +4103,9 @@ class CSR:
                 lines.append(f"    - {kind}: {val}")
         return "\n".join(lines)
 
-
 # ======================================================================
 #  PEM
 # ======================================================================
-
 
     def __eq__(self, other):
         return isinstance(other, CSR) and self.der == other.der
@@ -3901,7 +4116,6 @@ _PEM_RE = re.compile(
     rb"-----BEGIN ([A-Z0-9 ]+?)-----\s*([A-Za-z0-9+/=\s]+?)\s*-----END \1-----",
     re.DOTALL,
 )
-
 
 def pem_decode(data):
     if isinstance(data, str):
@@ -3922,22 +4136,18 @@ def pem_decode(data):
             raise X509ParseError(f"bad base64 in PEM block {label}: {e}")
     return out
 
-
 def pem_encode(label, der, width=64):
     b64 = base64.b64encode(der).decode("ascii")
     lines = [b64[i:i+width] for i in range(0, len(b64), width)]
     return f"-----BEGIN {label}-----\n" + "\n".join(lines) + f"\n-----END {label}-----\n"
 
-
 def load_pem_certs(data):
     return [Cert(der) for label, der in pem_decode(data)
             if "CERTIFICATE" in label and "REQUEST" not in label]
 
-
 def load_pem_csrs(data):
     return [CSR(der) for label, der in pem_decode(data)
             if "CERTIFICATE REQUEST" in label]
-
 
 # ======================================================================
 #  CertBundle
@@ -3964,7 +4174,6 @@ class CertBundle:
     def __iter__(self):       return iter(self.certs)
     def __getitem__(self, i): return self.certs[i]
     def __repr__(self):       return f"<CertBundle {len(self.certs)} certs>"
-
 
     def sort_chain(self):
         """Упорядочить сертификаты от leaf к root.
@@ -4028,11 +4237,9 @@ class CertBundle:
             b.set_cipher(cipher)
         return b.build()
 
-
 # ======================================================================
 #  CRLBuilder — выпуск CRL
 # ======================================================================
-
 
     def __eq__(self, other):
         return (isinstance(other, CertBundle)
@@ -4184,7 +4391,6 @@ class CRLBuilder:
 
         return CRL(der_seq(tbs, sig_alg, der_bitstring(sig)))
 
-
 # ======================================================================
 #  CRL — парсинг и проверка
 # ======================================================================
@@ -4315,8 +4521,6 @@ class CRL:
             lines.append(f"    ... ещё {len(self.revoked)-20}")
         return "\n".join(lines)
 
-
-
     def __eq__(self, other):
         return isinstance(other, CRL) and self.der == other.der
 
@@ -4328,7 +4532,6 @@ def load_pem_crls(data):
         if "CRL" in label.upper():
             out.append(CRL(der))
     return out
-
 
 # ======================================================================
 #  OCSP (RFC 6960)
@@ -4344,7 +4547,6 @@ OCSP_STATUS_NAMES = {
 }
 OCSP_STATUS_CODES = {v: k for k, v in OCSP_STATUS_NAMES.items()}
 
-
 def _enc_gentime(dt):
     """Всегда GeneralizedTime (для OCSP)."""
     if dt.tzinfo is None:
@@ -4352,13 +4554,11 @@ def _enc_gentime(dt):
     dt = dt.astimezone(datetime.timezone.utc)
     return _der_tlv(0x18, dt.strftime("%Y%m%d%H%M%SZ").encode("ascii"))
 
-
 def _compute_key_hash(spki_der, hash_name="sha1"):
     """Хэш от BIT STRING subjectPublicKey (без тега, длины, unused-bits)."""
     node, _ = ASN1.parse(spki_der)
     bits = node.children[1]
     return hashlib.new(hash_name, bits.value[1:]).digest()
-
 
 def _enc_cert_id(issuer, serial, hash_name="sha256"):
     """CertID ::= SEQUENCE { hashAlgorithm, issuerNameHash, issuerKeyHash, serial }"""
@@ -4376,7 +4576,6 @@ def _enc_cert_id(issuer, serial, hash_name="sha256"):
         der_int(serial),
     )
 
-
 def _parse_cert_id(node):
     """CertID node → (hash_name, name_hash, key_hash, serial)."""
     if len(node.children) != 4:
@@ -4387,7 +4586,6 @@ def _parse_cert_id(node):
     key_hash = node.children[2].value
     serial = node.children[3].as_uint()
     return hash_name, name_hash, key_hash, serial
-
 
 def _parse_extensions_sequence(node):
     """node = SEQUENCE OF Extension. → dict {oid: (critical, value_bytes)}"""
@@ -4405,7 +4603,6 @@ def _parse_extensions_sequence(node):
             val = ext.children[1].value
             out[oid] = (False, val)
     return out
-
 
 class OCSPRequest:
     """OCSPRequest (RFC 6960 §4.1)."""
@@ -4515,7 +4712,6 @@ class OCSPRequest:
     def __repr__(self):
         cid = self.cert_id
         return f"<OCSPRequest serial=0x{cid[3]:x}>" if cid else "<OCSPRequest>"
-
 
 class OCSPResponse:
     """OCSPResponse (RFC 6960 §4.2)."""
@@ -4746,7 +4942,6 @@ class OCSPResponse:
                 lines.append(f"    Next:     {r['next_update'].isoformat()}")
         return "\n".join(lines)
 
-
 class OCSPResponseBuilder:
     """Сборка подписанного OCSPResponse."""
 
@@ -4896,12 +5091,10 @@ class OCSPResponseBuilder:
         outer = der_seq(_der_tlv(0x0A, b"\x00"), _der_tlv(0xA0, rb))
         return OCSPResponse(outer)
 
-
 def _ocsp_error(status_name, message=""):
     """Простой OCSPResponse с ошибкой (без подписи)."""
     code = OCSP_STATUS_CODES.get(status_name, 2)
     return OCSPResponse(der_seq(_der_tlv(0x0A, bytes([code]))))
-
 
 # ======================================================================
 #  PKCS#12 (RFC 7292) — export / import / verify
@@ -4917,7 +5110,6 @@ OID_X509_CERTIFICATE   = "1.2.840.113549.1.9.22.1"
 OID_FRIENDLY_NAME      = "1.2.840.113549.1.9.20"
 OID_LOCAL_KEY_ID       = "1.2.840.113549.1.9.21"
 OID_HMAC_SHA1          = "1.2.840.113549.2.7"
-
 
 def _pkcs12_pbkdf(password, salt, iterations, keylen,
                   purpose=1, hash_name="sha1"):
@@ -4971,7 +5163,6 @@ def _pkcs12_pbkdf(password, salt, iterations, keylen,
         I = bytes(new_I)
     return out[:keylen]
 
-
 def _pkcs12_mac(password, authSafe_der, salt, iterations,
                 hash_name="sha256"):
     """MAC = HMAC-hash(K[0:hashlen], authSafe_der), K = PBKDF(purpose=3).
@@ -4983,7 +5174,6 @@ def _pkcs12_mac(password, authSafe_der, salt, iterations,
     K = _pkcs12_pbkdf(password, salt, iterations, dlen,
                       purpose=3, hash_name=hash_name)
     return hmac.new(K, authSafe_der, hash_name).digest()
-
 
 def _enc_cert_bag(cert_der, friendly_name=None, key_id=None):
     """CertBag + bagAttributes."""
@@ -5014,7 +5204,6 @@ def _enc_cert_bag(cert_der, friendly_name=None, key_id=None):
 
     return der_seq(*parts)
 
-
 def _enc_shrouded_key_bag(encrypted_pkcs8_der, friendly_name=None, key_id=None):
     """SafeBag с pkcs8ShroudedKeyBag."""
     attrs = []
@@ -5038,14 +5227,12 @@ def _enc_shrouded_key_bag(encrypted_pkcs8_der, friendly_name=None, key_id=None):
 
     return der_seq(*parts)
 
-
 def _pkcs12_wrap_data(content_der):
     """ContentInfo { pkcs7-data, [0] EXPLICIT OCTET STRING(content_der) }."""
     return der_seq(
         encode_oid(OID_PKCS7_DATA),
         _der_tlv(0xA0, der_octet(content_der)),
     )
-
 
 def _pkcs12_wrap_encrypted(pbes2_encrypted_der):
     """ContentInfo { pkcs7-encryptedData, [0] EXPLICIT EncryptedData }.
@@ -5057,7 +5244,6 @@ def _pkcs12_wrap_encrypted(pbes2_encrypted_der):
         _der_tlv(0xA0, pbes2_encrypted_der),
     )
 
-
 def _pkcs12_encrypted_data(pbes2_alg_der, ciphertext):
     """EncryptedData { version=0, EncryptedContentInfo { pkcs7-data, alg, [0] IMPLICIT } }."""
     eci = der_seq(
@@ -5066,7 +5252,6 @@ def _pkcs12_encrypted_data(pbes2_alg_der, ciphertext):
         _der_tlv(0x80, ciphertext),   # [0] IMPLICIT OCTET STRING
     )
     return der_seq(der_int(0), eci)
-
 
 class PKCS12:
     """
@@ -5491,7 +5676,6 @@ class PKCS12:
         return (f"<PKCS12 key={type(self.key).__name__} "
                 f"cert={self.cert.subject!r} chain={len(self.chain)}>")
 
-
 class PKCS12Builder:
     """
     Fluent-обёртка над PKCS12.build().
@@ -5637,9 +5821,7 @@ class PKCS12Builder:
         """Собрать и сохранить в файл."""
         return self.build().save(path)
 
-
 def load_pem_bundle(data): return CertBundle.from_pem(data)
-
 
 def save_pem(path, *items):
     lines = []
@@ -5658,7 +5840,6 @@ def save_pem(path, *items):
     path = os.path.expanduser(path)
     with open(path, "w") as f: f.write("".join(lines))
     return os.path.abspath(path)
-
 
 # ======================================================================
 #  AES-256 (чистый Python) + CBC
@@ -5705,7 +5886,6 @@ _AES_INV_SBOX = bytes.fromhex(
 
 _AES_RCON = bytes([0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36])
 
-
 def _gf_mul(a, b):
     p = 0
     for _ in range(8):
@@ -5716,14 +5896,12 @@ def _gf_mul(a, b):
         b >>= 1
     return p
 
-
 _GF_MUL2  = bytes(_gf_mul(b, 2)  for b in range(256))
 _GF_MUL3  = bytes(_gf_mul(b, 3)  for b in range(256))
 _GF_MUL9  = bytes(_gf_mul(b, 9)  for b in range(256))
 _GF_MUL11 = bytes(_gf_mul(b, 11) for b in range(256))
 _GF_MUL13 = bytes(_gf_mul(b, 13) for b in range(256))
 _GF_MUL14 = bytes(_gf_mul(b, 14) for b in range(256))
-
 
 def _aes256_key_expand(key):
     """AES-256 key expansion. key=32 байта → 60 words."""
@@ -5741,20 +5919,17 @@ def _aes256_key_expand(key):
         w.append([w[i-8][j] ^ t[j] for j in range(4)])
     return w
 
-
 def _aes_shift_rows(s):
     return [s[0], s[5], s[10], s[15],
             s[4], s[9], s[14], s[3],
             s[8], s[13], s[2], s[7],
             s[12], s[1], s[6], s[11]]
 
-
 def _aes_inv_shift_rows(s):
     return [s[0], s[13], s[10], s[7],
             s[4], s[1], s[14], s[11],
             s[8], s[5], s[2], s[15],
             s[12], s[9], s[6], s[3]]
-
 
 def _aes_mix_columns(s):
     out = list(s)
@@ -5766,7 +5941,6 @@ def _aes_mix_columns(s):
         out[4*c+3] = _GF_MUL3[a0] ^ a1 ^ a2 ^ _GF_MUL2[a3]
     return out
 
-
 def _aes_inv_mix_columns(s):
     out = list(s)
     for c in range(4):
@@ -5777,7 +5951,6 @@ def _aes_inv_mix_columns(s):
         out[4*c+3] = _GF_MUL11[a0] ^ _GF_MUL13[a1] ^ _GF_MUL9[a2] ^ _GF_MUL14[a3]
     return out
 
-
 def _aes_round_keys(w):
     rk = []
     for r in range(15):
@@ -5786,7 +5959,6 @@ def _aes_round_keys(w):
             block.extend(w[4*r + c])
         rk.append(block)
     return rk
-
 
 def _aes256_encrypt_block(block, w):
     state = list(block)
@@ -5805,7 +5977,6 @@ def _aes256_encrypt_block(block, w):
         state[i] ^= rk[14][i]
     return bytes(state)
 
-
 def _aes256_decrypt_block(block, w):
     state = list(block)
     rk = _aes_round_keys(w)
@@ -5823,11 +5994,9 @@ def _aes256_decrypt_block(block, w):
         state[i] ^= rk[0][i]
     return bytes(state)
 
-
 def _pkcs7_pad(data, block=16):
     n = block - len(data) % block
     return data + bytes([n]) * n
-
 
 def _pkcs7_unpad(data, block=16):
     if len(data) == 0 or len(data) % block != 0:
@@ -5838,7 +6007,6 @@ def _pkcs7_unpad(data, block=16):
     if data[-n:] != bytes([n]) * n:
         raise X509Error("bad padding content")
     return data[:-n]
-
 
 def _aes256_cbc_encrypt(key, iv, plaintext):
     w = _aes256_key_expand(key)
@@ -5851,7 +6019,6 @@ def _aes256_cbc_encrypt(key, iv, plaintext):
         out.extend(ct)
         prev = ct
     return bytes(out)
-
 
 def _aes256_cbc_decrypt(key, iv, ciphertext):
     w = _aes256_key_expand(key)
@@ -5866,13 +6033,11 @@ def _aes256_cbc_decrypt(key, iv, ciphertext):
         prev = blk
     return _pkcs7_unpad(bytes(out), 16)
 
-
 # ======================================================================
 #  AES-256-GCM (NIST SP 800-38D, чистый Python)
 # ======================================================================
 
 _AES_GCM_R = 0xE1 << 120
-
 
 def _gf128_mul(x, y):
     """Умножение в GF(2^128). x, y, результат — int."""
@@ -5887,7 +6052,6 @@ def _gf128_mul(x, y):
             v ^= _AES_GCM_R
     return z
 
-
 def _ghash(h, data):
     """GHASH_{H}(data) → 16 bytes. h — int, data — bytes (кратно 16)."""
     if len(data) % 16 != 0:
@@ -5898,13 +6062,11 @@ def _ghash(h, data):
         y = _gf128_mul(y ^ blk, h)
     return y.to_bytes(16, "big")
 
-
 def _gcm_inc32(block):
     """Increment last 32 bits (big-endian)."""
     counter = int.from_bytes(block[12:], "big")
     counter = (counter + 1) & 0xFFFFFFFF
     return block[:12] + counter.to_bytes(4, "big")
-
 
 def _gcm_ctr(key_w, iv, data):
     """GCTR: AES-CTR. Первый блок шифруется counter'ом J0+1 = IV||0x02."""
@@ -5917,7 +6079,6 @@ def _gcm_ctr(key_w, iv, data):
         out.extend(a ^ b for a, b in zip(blk, ks))
     return bytes(out)
 
-
 def _gcm_ghash_data(h_int, aad, ct):
     """GHASH для AAD + CT с длинами."""
     def pad16(b):
@@ -5928,7 +6089,6 @@ def _gcm_ghash_data(h_int, aad, ct):
     block += (len(aad) * 8).to_bytes(8, "big")
     block += (len(ct) * 8).to_bytes(8, "big")
     return _ghash(h_int, block)
-
 
 def _aes256_gcm_encrypt(key, nonce, plaintext, aad=b""):
     """AES-256-GCM encrypt. nonce — 12 байт. → (ct, tag16)."""
@@ -5946,7 +6106,6 @@ def _aes256_gcm_encrypt(key, nonce, plaintext, aad=b""):
     tag = bytes(a ^ b for a, b in zip(ek_j0, s))
     return ct, tag
 
-
 def _aes256_gcm_decrypt(key, nonce, ciphertext, tag, aad=b""):
     """AES-256-GCM decrypt. Verify tag, иначе X509Error."""
     if len(key) != 32:
@@ -5963,7 +6122,6 @@ def _aes256_gcm_decrypt(key, nonce, ciphertext, tag, aad=b""):
         raise X509Error("AES-GCM: tag mismatch (неверный пароль или данные)")
     return _gcm_ctr(w, nonce, ciphertext)
 
-
 # ======================================================================
 #  PKCS#8 EncryptedPrivateKeyInfo (PBES2 + PBKDF2-HMAC-SHA256 + AES-256-CBC/GCM)
 # ======================================================================
@@ -5974,12 +6132,10 @@ OID_HMAC_SHA256        = "1.2.840.113549.2.9"
 OID_AES_256_CBC        = "2.16.840.1.101.3.4.1.42"
 OID_AES_256_GCM        = "2.16.840.1.101.3.4.1.46"
 
-
 def _pbkdf2_sha256(password, salt, iterations, keylen):
     if isinstance(password, str):
         password = password.encode("utf-8")
     return hashlib.pbkdf2_hmac("sha256", password, salt, iterations, keylen)
-
 
 def _pkcs8_encrypt(plain_der, password, *, iterations=100000, salt=None,
                    cipher="aes-256-cbc", nonce=None):
@@ -6020,7 +6176,6 @@ def _pkcs8_encrypt(plain_der, password, *, iterations=100000, salt=None,
     pbes2_params = der_seq(kdf, enc_scheme)
     alg = der_seq(encode_oid(OID_PBES2), pbes2_params)
     return der_seq(alg, der_octet(ciphertext))
-
 
 def _pkcs8_decrypt(encrypted_der, password):
     """EncryptedPrivateKeyInfo DER → plain_der."""
@@ -6081,7 +6236,6 @@ def _pkcs8_decrypt(encrypted_der, password):
 
     raise X509Error(f"unsupported cipher: {cipher_oid}")
 
-
 # ======================================================================
 #  CRL helpers
 # ======================================================================
@@ -6093,14 +6247,12 @@ def _enc_crl_reason(code):
     return _enc_extension(OID_CRL_REASON, False,
                           _der_tlv(0x0A, bytes([code])))
 
-
 def _parse_crl_reason(ext_node):
     """Из Extension { OID=reason, extnValue=OCTET(ENUMERATED) } → int."""
     # ext_node.children = [OID, OCTET] или [OID, BOOL, OCTET]
     val_octet = ext_node.children[-1]
     inner, _ = ASN1.parse(val_octet.value)
     return inner.as_int()
-
 
 # ======================================================================
 #  Directory String канонизация (RFC 4518)
@@ -6114,7 +6266,6 @@ def _map_insignificant_space(s):
     """
     return " ".join(s.split())
 
-
 def _case_fold(s):
     """RFC 4518 §2.3: case folding.
 
@@ -6122,7 +6273,6 @@ def _case_fold(s):
     İ → i̇). Для ASCII-имён полностью эквивалентно .lower().
     """
     return s.casefold()
-
 
 def _normalize_nfkc(s):
     """RFC 4518 §2.2: Unicode NFKC.
@@ -6138,14 +6288,12 @@ def _normalize_nfkc(s):
     except Exception:
         return s
 
-
 def _canonicalize_attribute_value(s):
     """Применить шаги RFC 4518 к одной строке."""
     s = _normalize_nfkc(s)
     s = _map_insignificant_space(s)
     s = _case_fold(s)
     return s
-
 
 def canonicalize_name(name):
     """Канонический вид Name для сравнения (RFC 4518 + RFC 5280 §7.1).
@@ -6167,7 +6315,6 @@ def canonicalize_name(name):
         result.append(tuple(rdn_canon))
     return tuple(result)
 
-
 def names_equal(a, b):
     """Каноничное сравнение двух Name.
 
@@ -6185,7 +6332,6 @@ def names_equal(a, b):
         raise TypeError("names_equal: ожидался Name или Cert")
     return canonicalize_name(a) == canonicalize_name(b)
 
-
 # ======================================================================
 #  validate_hostname (RFC 6125)
 # ======================================================================
@@ -6202,7 +6348,6 @@ def _dnsname_match(pattern, hostname):
         return False
     head, rest = hostname.split(".", 1)
     return bool(head) and rest == suffix
-
 
 def validate_hostname(cert, hostname):
     if not hostname or not isinstance(hostname, str):
@@ -6225,7 +6370,6 @@ def validate_hostname(cert, hostname):
         return False
     cn = cert.subject.get("CN")
     return bool(cn) and _dnsname_match(cn, hostname)
-
 
 # ======================================================================
 #  verify_chain (top-level helper)
@@ -6250,7 +6394,6 @@ def verify_chain(chain, trust_anchor=None, when=None):
         if not last.verify_signature(trust_anchor):
             return False
     return True
-
 
 # ======================================================================
 #  CertificateBuilder — fluent-сборка сертификата
@@ -6315,7 +6458,16 @@ class CertificateBuilder:
     # ---------- subject / issuer ----------
 
     def add_subject(self, name):
-        """Принимает dict, Name, Cert или CSR."""
+        """Принимает dict, Name, Cert или CSR.
+
+        Повторный вызов → X509Error.
+        """
+        if self._subject is not None:
+            _fail(
+                "CertificateBuilder.add_subject: subject уже задан.",
+                "не вызывай .add_subject() дважды. Если нужно поменять — "
+                "создай новый CertificateBuilder()",
+            )
         if isinstance(name, dict):
             if not name:
                 _fail("add_subject: пустой dict. Нужно хотя бы CN.",
@@ -6335,7 +6487,16 @@ class CertificateBuilder:
         return self
 
     def add_issuer(self, name):
-        """Принимает dict, Name, Cert или CSR. Cert/CA — берётся .subject."""
+        """Принимает dict, Name, Cert или CSR. Cert/CA — берётся .subject.
+
+        Повторный вызов → X509Error.
+        """
+        if self._issuer is not None:
+            _fail(
+                "CertificateBuilder.add_issuer: issuer уже задан.",
+                "не вызывай .add_issuer() дважды. Если нужен self-signed — "
+                "используй .self_signed() вместо повторного add_issuer()",
+            )
         if isinstance(name, Name):
             self._issuer = name
             self._issuer_obj = None
@@ -6368,15 +6529,30 @@ class CertificateBuilder:
 
     def self_signed(self):
         """Помечает сертификат как self-signed (issuer = subject)."""
+        if self._issuer is not None:
+            _fail(
+                "CertificateBuilder.self_signed: issuer уже задан через "
+                ".add_issuer().",
+                "self_signed() и add_issuer() взаимоисключающие. "
+                "Оставь что-то одно",
+            )
         self._self_signed = True
         return self
 
     # ---------- публичный ключ ----------
 
     def add_public_key(self, key_or_der):
-        """RSAKeys, Ed25519Keys, ECDSAKeys, их SPKI-DER, или CSR."""
+        """RSAKeys, Ed25519Keys, ECDSAKeys, их SPKI-DER, или CSR.
+
+        Повторный вызов → X509Error.
+        """
+        if self._public_key_der is not None:
+            _fail(
+                "CertificateBuilder.add_public_key: публичный ключ уже задан.",
+                "не вызывай .add_public_key() дважды. Создай новый "
+                "CertificateBuilder()",
+            )
         if isinstance(key_or_der, (RSAKeys, Ed25519Keys, ECDSAKeys)):
-            _check_rsa_key(key_or_der, "CertificateBuilder.add_public_key")
             self._public_key_der = key_or_der.to_public_der()
         elif isinstance(key_or_der, CSR):
             self._public_key_der = key_or_der.spki_der
@@ -6391,12 +6567,22 @@ class CertificateBuilder:
     def add_serial(self, n):
         if n is None:
             return self
+        if self._serial is not None:
+            _fail(
+                "CertificateBuilder.add_serial: serial уже задан.",
+                "не вызывай .add_serial()/.add_serial_random() дважды",
+            )
         if n <= 0:
             raise ValueError("serial must be positive")
         self._serial = n
         return self
 
     def add_serial_random(self, bits=63):
+        if self._serial is not None:
+            _fail(
+                "CertificateBuilder.add_serial_random: serial уже задан.",
+                "не вызывай .add_serial()/.add_serial_random() дважды",
+            )
         self._serial = secrets.randbits(bits) | 1
         return self
 
@@ -6782,7 +6968,6 @@ class CertificateBuilder:
             )
 
         # ---- warnings (не-фатальные) ----
-        _check_rsa_key(signing_key, "CertificateBuilder.sign")
         if not isinstance(signing_key, (Ed25519Keys,)):
             _check_hash(self._hash_name, "CertificateBuilder.sign")
         if isinstance(signing_key, ECDSAKeys) and \
@@ -6887,7 +7072,6 @@ class CertificateBuilder:
             return ca
         return Cert(der)
 
-
 def _ext_oid(ext_der):
     try:
         node, _ = ASN1.parse(ext_der)
@@ -6895,10 +7079,8 @@ def _ext_oid(ext_der):
     except Exception:
         return ""
 
-
 # Backwards-compatible alias
 CertBuilder = CertificateBuilder
-
 
 # ======================================================================
 #  CSRBuilder
@@ -6924,6 +7106,11 @@ class CSRBuilder:
         self._sig_scheme = "pkcs1v15"
 
     def add_subject(self, name):
+        if self._subject is not None:
+            _fail(
+                "CSRBuilder.add_subject: subject уже задан.",
+                "не вызывай .add_subject() дважды. Создай новый CSRBuilder()",
+            )
         if isinstance(name, dict):
             if not name:
                 _fail("CSRBuilder.add_subject: пустой dict.",
@@ -6943,6 +7130,11 @@ class CSRBuilder:
         return self
 
     def add_public_key(self, key_or_der):
+        if self._public_key_der is not None:
+            _fail(
+                "CSRBuilder.add_public_key: публичный ключ уже задан.",
+                "не вызывай .add_public_key() дважды. Создай новый CSRBuilder()",
+            )
         if isinstance(key_or_der, (RSAKeys, Ed25519Keys, ECDSAKeys)):
             self._public_key_der = key_or_der.to_public_der()
         elif isinstance(key_or_der, (bytes, bytearray)):
@@ -7056,7 +7248,6 @@ class CSRBuilder:
             )
 
         # ---- warnings ----
-        _check_rsa_key(signing_key, "CSRBuilder.sign")
         if not isinstance(signing_key, Ed25519Keys):
             _check_hash(self._hash_name, "CSRBuilder.sign")
 
@@ -7089,7 +7280,6 @@ class CSRBuilder:
         sig_alg, sig = _sign_and_build_alg(
             signing_key, cri, self._hash_name, self._sig_scheme)
         return CSR(der_seq(cri, sig_alg, der_bitstring(sig)))
-
 
 # ======================================================================
 #  __all__

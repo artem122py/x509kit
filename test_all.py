@@ -27,6 +27,12 @@ test_all.py — единый прогон x509kit.
  22.  Network revocation (CRL/OCSP HTTP)
  23.  CMS (RFC 5652) parsing
  24.  CMS (RFC 5652) sign / verify
+ 25.  CLI (info/keygen/csr/verify/cms/pkcs12/crl)
+ 26.  Builder guards (dup calls)
+ 27.  from_public_bytes
+ 28.  Zero public key / small-order defenses
+ 29.  ECDSA: invalid curve point / point at infinity
+ 30.  Weak RSA warning on every construction path
 
 Запуск:
     python test_all.py
@@ -64,6 +70,7 @@ from x509kit.x509 import (
     _der_tlv, encode_oid, TAG_SET, TAG_OCTET_STRING,
 )
 from x509kit.cms import CMSSignedData, cms_sign, cms_load
+from x509kit import __version__
 
 
 # ======================================================================
@@ -1607,6 +1614,645 @@ def test_cms_sign_verify():
         T.ok("cms_sign: key != cert → X509Error")
 
 
+def test_cli():
+    hr("25. CLI (info / keygen / csr / verify / cms / pkcs12 / crl)")
+
+    import io
+    import contextlib
+    import os
+    import shutil
+    import tempfile
+    from x509kit.cli import main as cli_main
+
+    # Termux: /tmp часто нет — используем $TMPDIR, иначе $HOME/.cache,
+    # иначе текущую директорию. Создаём родителя, если его нет.
+    _base = (os.environ.get("TMPDIR")
+             or os.path.expanduser("~/.cache")
+             or os.path.expanduser("~")
+             or ".")
+    try:
+        os.makedirs(_base, exist_ok=True)
+        tmpdir = tempfile.mkdtemp(prefix="x509kit-cli-", dir=_base)
+    except OSError:
+        tmpdir = tempfile.mkdtemp(prefix="x509kit-cli-")
+
+    def run(argv):
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                rc = cli_main(argv)
+        except SystemExit as e:
+            rc = e.code if isinstance(e.code, int) else 0
+        return rc, out.getvalue(), err.getvalue()
+
+    try:
+        # --- --version ---
+        rc, out, err = run(["--version"])
+        T.expect("CLI --version: rc=0", rc == 0)
+        T.expect("CLI --version: содержит версию",
+                 "x509kit" in out and __version__ in out)
+
+        # --- test-данные ---
+        ca_key = Ed25519Keys.generate()
+        ca = (CertificateBuilder(is_ca=True)
+            .add_subject({"CN": "CLI Test CA"})
+            .add_public_key(ca_key)
+            .add_serial_random().add_validity(days=30)
+            .add_basic_constraints(path_len=1)
+            .add_key_usage("keyCertSign", "cRLSign")
+            .self_signed().sign(ca_key))
+
+        leaf_key = Ed25519Keys.generate()
+        leaf = (CertificateBuilder()
+            .add_subject({"CN": "cli.example"})
+            .add_issuer(ca).add_public_key(leaf_key)
+            .add_serial_random().add_validity(days=30)
+            .add_san_dns("cli.example", "www.cli.example")
+            .sign(ca_key))
+
+        ca_path = os.path.join(tmpdir, "ca.pem")
+        leaf_path = os.path.join(tmpdir, "leaf.pem")
+        with open(ca_path, "w") as f: f.write(ca.to_pem())
+        with open(leaf_path, "w") as f: f.write(leaf.to_pem())
+
+        # --- info ---
+        rc, out, err = run(["info", leaf_path])
+        T.expect("CLI info: rc=0", rc == 0, f"err={err[:100]}")
+        T.expect("CLI info: shows subject", "cli.example" in out)
+        T.expect("CLI info: shows issuer", "CLI Test CA" in out)
+        T.expect("CLI info: shows Version: 3", "Version: 3" in out)
+        T.expect("CLI info: shows SAN", "www.cli.example" in out)
+
+        # --- info через stdin ---
+        import sys as _sys
+        old_stdin = _sys.stdin
+        class _FakeStdin:
+            buffer = io.BytesIO(leaf.to_pem().encode())
+        _sys.stdin = _FakeStdin()
+        try:
+            rc, out, err = run(["info", "-"])
+            T.expect("CLI info -: rc=0", rc == 0)
+            T.expect("CLI info -: shows subject", "cli.example" in out)
+        finally:
+            _sys.stdin = old_stdin
+
+        # --- info: несуществующий файл → rc=1 ---
+        rc, out, err = run(["info", "/nonexistent/path.pem"])
+        T.expect("CLI info: missing file → rc=1", rc == 1)
+
+        # --- verify: OK ---
+        rc, out, err = run(["verify", "--ca", ca_path, leaf_path])
+        T.expect("CLI verify: rc=0", rc == 0, f"err={err[:200]}")
+        T.expect("CLI verify: prints OK", "OK" in out)
+
+        # --- verify: wrong anchor → rc=1 ---
+        other_key = Ed25519Keys.generate()
+        other = (CertificateBuilder(is_ca=True)
+            .add_subject({"CN": "Other CA"})
+            .add_public_key(other_key)
+            .add_serial_random().add_validity(days=30)
+            .add_basic_constraints(path_len=0)
+            .add_key_usage("keyCertSign", "cRLSign")
+            .self_signed().sign(other_key))
+        other_path = os.path.join(tmpdir, "other.pem")
+        with open(other_path, "w") as f: f.write(other.to_pem())
+        rc, out, err = run(["verify", "--ca", other_path, leaf_path])
+        T.expect("CLI verify wrong anchor: rc=1", rc == 1)
+
+        # --- keygen ed25519 ---
+        gen_key_path = os.path.join(tmpdir, "gen.key")
+        rc, out, err = run(["keygen", "--type", "ed25519",
+                            "--out", gen_key_path])
+        T.expect("CLI keygen ed25519: rc=0", rc == 0, f"err={err[:100]}")
+        T.expect("CLI keygen ed25519: file created",
+                 os.path.exists(gen_key_path))
+        with open(gen_key_path, "rb") as f:
+            k = Ed25519Keys.from_pem(f.read(), private=True)
+        T.expect("CLI keygen ed25519: reloadable", k.pub is not None)
+
+        # --- keygen ed25519 с паролем ---
+        enc_key_path = os.path.join(tmpdir, "enc.key")
+        rc, out, err = run(["keygen", "--type", "ed25519",
+                            "--password", "hunter2",
+                            "--out", enc_key_path])
+        T.expect("CLI keygen encrypted: rc=0", rc == 0)
+        with open(enc_key_path, "rb") as f:
+            data = f.read()
+        T.expect("CLI keygen encrypted: ENCRYPTED PRIVATE KEY",
+                 b"ENCRYPTED PRIVATE KEY" in data)
+        k2 = Ed25519Keys.from_pem(data, private=True, password="hunter2")
+        T.expect("CLI keygen encrypted: decryptable",
+                 k2.pub is not None and len(k2.pub) == 32)
+        # загрузка с неверным паролем должна упасть
+        try:
+            Ed25519Keys.from_pem(data, private=True, password="wrong")
+            T.fail("CLI keygen encrypted: wrong pw rejected", "не бросило")
+        except Exception:
+            T.ok("CLI keygen encrypted: wrong pw rejected")
+
+        # --- csr create ---
+        csr_path = os.path.join(tmpdir, "req.csr")
+        rc, out, err = run([
+            "csr", "create",
+            "--key", gen_key_path,
+            "--subject", "CN=cli-csr.example, O=CLI",
+            "--san", "dns=cli-csr.example",
+            "--san", "dns=www.cli-csr.example",
+            "--out", csr_path,
+        ])
+        T.expect("CLI csr create: rc=0", rc == 0, f"err={err[:200]}")
+        T.expect("CLI csr create: file created", os.path.exists(csr_path))
+        with open(csr_path, "rb") as f:
+            csr = CSR(f.read())
+        T.expect("CLI csr create: subject CN",
+                 csr.subject.get("CN") == "cli-csr.example")
+        T.expect("CLI csr create: 2 SANs",
+                 set(csr.dns_names) == {"cli-csr.example",
+                                         "www.cli-csr.example"})
+        T.expect("CLI csr create: signature valid", csr.verify_signature())
+
+        # --- csr create: плохой --san ---
+        rc, out, err = run([
+            "csr", "create", "--key", gen_key_path,
+            "--subject", "CN=x",
+            "--san", "bogus",
+            "--out", os.path.join(tmpdir, "bad.csr"),
+        ])
+        T.expect("CLI csr create: bad --san → rc=2", rc == 2)
+
+        # --- csr info ---
+        rc, out, err = run(["csr", "info", csr_path])
+        T.expect("CLI csr info: rc=0", rc == 0)
+        T.expect("CLI csr info: shows CN", "cli-csr.example" in out)
+
+        # --- cms verify (attached) ---
+        content = b"CLI CMS test content"
+        sd = cms_sign(content, key=leaf_key, cert=leaf, chain=[ca])
+        cms_path = os.path.join(tmpdir, "msg.p7s")
+        with open(cms_path, "wb") as f: f.write(sd.to_der())
+        rc, out, err = run(["cms", "verify", cms_path, "--ca", ca_path])
+        T.expect("CLI cms verify attached: rc=0", rc == 0, f"err={err[:200]}")
+        T.expect("CLI cms verify attached: OK", "OK" in out)
+
+        # --- cms verify (detached) ---
+        sd_det = cms_sign(content, key=leaf_key, cert=leaf, chain=[ca],
+                           detached=True)
+        cms_det = os.path.join(tmpdir, "msg.p7s.sig")
+        with open(cms_det, "wb") as f: f.write(sd_det.to_der())
+        content_path = os.path.join(tmpdir, "content.bin")
+        with open(content_path, "wb") as f: f.write(content)
+
+        rc, out, err = run(["cms", "verify", cms_det,
+                            "--content", content_path, "--ca", ca_path])
+        T.expect("CLI cms verify detached: rc=0", rc == 0)
+
+        rc, out, err = run(["cms", "verify", cms_det, "--ca", ca_path])
+        T.expect("CLI cms verify detached without --content: rc=2", rc == 2)
+
+        # --- pkcs12 info ---
+        p12 = leaf_key.to_pkcs12(leaf, chain=[ca], password="pw", name="cli")
+        p12_path = os.path.join(tmpdir, "test.p12")
+        p12.save(p12_path)
+        rc, out, err = run(["pkcs12", "info", p12_path, "--password", "pw"])
+        T.expect("CLI pkcs12 info: rc=0", rc == 0, f"err={err[:200]}")
+        T.expect("CLI pkcs12 info: MAC valid", "MAC valid:    True" in out)
+        T.expect("CLI pkcs12 info: subject", "cli.example" in out)
+
+        # --- crl info ---
+        ca_with_key = CACert.from_cert(ca, signing_key=ca_key)
+        ca_with_key.revoke(leaf, reason="keyCompromise")
+        crl = ca_with_key.to_crl(days=7)
+        crl_path = os.path.join(tmpdir, "test.crl.pem")
+        with open(crl_path, "w") as f: f.write(crl.to_pem())
+        rc, out, err = run(["crl", "info", crl_path])
+        T.expect("CLI crl info: rc=0", rc == 0)
+        T.expect("CLI crl info: issuer", "CLI Test CA" in out)
+        T.expect("CLI crl info: revoked count", "Revoked:" in out)
+
+        # --- unknown command → SystemExit(2) ---
+        rc, out, err = run(["bogus"])
+        T.expect("CLI unknown command: rc=2", rc == 2)
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_builder_dup_guards():
+    hr("26. Builder guards — повторный вызов бросает X509Error")
+
+    k = Ed25519Keys.generate()
+
+    for method, first_args, second_args in [
+        ("add_subject",     ({"CN": "a"},),     ({"CN": "b"},)),
+        ("add_issuer",      ({"CN": "a"},),     ({"CN": "b"},)),
+        ("add_public_key",  (k,),               (k,)),
+        ("add_serial",      (12345,),           (67890,)),
+    ]:
+        b = CertificateBuilder()
+        getattr(b, method)(*first_args)
+        try:
+            getattr(b, method)(*second_args)
+            T.fail(f"CertificateBuilder.{method} повторно → X509Error",
+                   "не бросило")
+        except X509Error as e:
+            T.expect(f"CertificateBuilder.{method} повторно → X509Error",
+                     "уже задан" in str(e))
+
+    b = CertificateBuilder()
+    b.add_serial_random()
+    try:
+        b.add_serial(123)
+        T.fail("add_serial после add_serial_random → X509Error", "не бросило")
+    except X509Error:
+        T.ok("add_serial после add_serial_random → X509Error")
+
+    b = CertificateBuilder()
+    b.add_serial_random()
+    try:
+        b.add_serial_random()
+        T.fail("add_serial_random дважды → X509Error", "не бросило")
+    except X509Error:
+        T.ok("add_serial_random дважды → X509Error")
+
+    ca_key = Ed25519Keys.generate()
+    ca = (CertificateBuilder(is_ca=True)
+          .add_subject({"CN": "Guard CA"})
+          .add_public_key(ca_key)
+          .add_serial_random().add_validity(days=30)
+          .add_basic_constraints(path_len=0)
+          .add_key_usage("keyCertSign", "cRLSign")
+          .self_signed().sign(ca_key))
+    b = CertificateBuilder()
+    b.add_issuer(ca)
+    try:
+        b.self_signed()
+        T.fail("self_signed после add_issuer → X509Error", "не бросило")
+    except X509Error as e:
+        T.expect("self_signed после add_issuer → X509Error",
+                 "уже задан" in str(e))
+
+    for method, args in [("add_subject", ({"CN": "x"},)),
+                          ("add_public_key", (k,))]:
+        b = CSRBuilder()
+        getattr(b, method)(*args)
+        try:
+            getattr(b, method)(*args)
+            T.fail(f"CSRBuilder.{method} повторно → X509Error", "не бросило")
+        except X509Error:
+            T.ok(f"CSRBuilder.{method} повторно → X509Error")
+
+    try:
+        b = CertificateBuilder()
+        b.add_subject({"CN": "still.works"})
+        b.add_issuer(ca)
+        b.add_public_key(Ed25519Keys.generate())
+        b.add_serial_random()
+        b.add_validity(days=30)
+        b.sign(ca_key)
+        T.ok("happy path: builder по-прежнему работает")
+    except X509Error as e:
+        T.fail("happy path: builder сломан", str(e))
+
+
+def test_from_public_bytes():
+    hr("27. from_public_bytes (Ed25519 / ECDSA / RSA)")
+
+    k = Ed25519Keys.generate()
+    k2 = Ed25519Keys.from_public_bytes(k.pub)
+    T.expect("Ed25519: from_public_bytes pub совпадает", k2.pub == k.pub)
+    T.expect("Ed25519: not private", not k2.is_private)
+
+    try:
+        Ed25519Keys.from_public_bytes(b"\x00" * 31)
+        T.fail("Ed25519: 31 байт → X509Error", "не бросило")
+    except X509Error:
+        T.ok("Ed25519: 31 байт → X509Error")
+
+    try:
+        Ed25519Keys.from_public_bytes("not bytes")
+        T.fail("Ed25519: str → TypeError", "не бросило")
+    except TypeError:
+        T.ok("Ed25519: str → TypeError")
+
+    for curve in ("P-256", "P-384", "P-521", "secp256k1"):
+        k = ECDSAKeys.generate(curve)
+        k2 = ECDSAKeys.from_public_bytes(k.pub, curve=curve)
+        T.expect(f"ECDSA {curve}: from_public_bytes uncompressed",
+                 k2.point == k.point)
+
+    for curve, size in (("P-256", 32), ("P-384", 48), ("P-521", 66)):
+        k = ECDSAKeys.generate(curve)
+        x = k.point[0].to_bytes(size, "big")
+        prefix = b"\x03" if (k.point[1] & 1) else b"\x02"
+        k2 = ECDSAKeys.from_public_bytes(prefix + x, curve=curve)
+        T.expect(f"ECDSA {curve}: from_public_bytes compressed",
+                 k2.point == k.point)
+
+    try:
+        ECDSAKeys.from_public_bytes(b"\x04" + b"\x00" * 20, curve="P-256")
+        T.fail("ECDSA: wrong size → X509Error", "не бросило")
+    except X509Error:
+        T.ok("ECDSA: wrong size → X509Error")
+
+    try:
+        ECDSAKeys.from_public_bytes(b"\x04" + b"\x00" * 64, curve="P-256")
+        T.fail("ECDSA: not on curve → X509Error", "не бросило")
+    except X509Error:
+        T.ok("ECDSA: not on curve → X509Error")
+
+    try:
+        ECDSAKeys.from_public_bytes(b"\x04" + b"\x00" * 64, curve="P-999")
+        T.fail("ECDSA: bad curve → X509Error", "не бросило")
+    except X509Error:
+        T.ok("ECDSA: bad curve → X509Error")
+
+    k = RSAKeys.generate(2048)
+    spki = k.to_public_der()
+    k2 = RSAKeys.from_public_bytes(spki)
+    T.expect("RSA: from_public_bytes spki",
+             k2.n == k.n and k2.e == k.e)
+
+    from x509kit.x509 import der_seq as _ds, der_int as _di
+    pkcs1 = _ds(_di(k.n), _di(k.e))
+    k3 = RSAKeys.from_public_bytes(pkcs1, fmt="pkcs1")
+    T.expect("RSA: from_public_bytes pkcs1",
+             k3.n == k.n and k3.e == k.e)
+
+    try:
+        RSAKeys.from_public_bytes(b"\x00", fmt="raw")
+        T.fail("RSA: bad fmt → X509Error", "не бросило")
+    except X509Error:
+        T.ok("RSA: bad fmt → X509Error")
+
+    k = Ed25519Keys.generate()
+    k_parsed = Ed25519Keys.from_public_bytes(k.pub)
+    sig = k.sign(b"test")
+    T.expect("Ed25519: sign orig, verify parsed",
+             k_parsed.verify(b"test", sig))
+
+    ec = ECDSAKeys.generate("P-256")
+    ec_parsed = ECDSAKeys.from_public_bytes(ec.pub, curve="P-256")
+    sig = ec.sign(b"test", "sha256")
+    T.expect("ECDSA: sign orig, verify parsed",
+             ec_parsed.verify(b"test", sig, "sha256"))
+
+    rsa = RSAKeys.generate(2048)
+    rsa_parsed = RSAKeys.from_public_bytes(rsa.to_public_der())
+    sig = rsa.sign_pkcs1v15(b"test", "sha256")
+    T.expect("RSA: sign orig, verify parsed",
+             rsa_parsed.verify_pkcs1v15(b"test", sig, "sha256"))
+
+
+def test_zero_pubkey_defense():
+    hr("28. Zero public key / small-order defenses")
+
+    from x509kit.x509 import (_ed_mul, _ed_encode, _ED_B,
+                              _ed_has_small_order)
+
+    try:
+        Ed25519Keys(pub=b"\x01" + b"\x00" * 31)
+        T.fail("Ed25519 identity pub → X509Error", "принят")
+    except X509Error as e:
+        T.expect("Ed25519 identity pub → X509Error",
+                 "малого порядка" in str(e))
+
+    try:
+        Ed25519Keys(pub=b"\x00" * 32)
+        T.fail("Ed25519 order-4 pub → X509Error", "принят")
+    except X509Error:
+        T.ok("Ed25519 order-4 pub → X509Error")
+
+    try:
+        Ed25519Keys.from_public_bytes(b"\x01" + b"\x00" * 31)
+        T.fail("Ed25519.from_public_bytes identity → X509Error", "принят")
+    except X509Error:
+        T.ok("Ed25519.from_public_bytes identity → X509Error")
+
+    T.expect("_ed_has_small_order(identity) == True",
+             _ed_has_small_order(b"\x01" + b"\x00" * 31))
+    T.expect("_ed_has_small_order(order-4) == True",
+             _ed_has_small_order(b"\x00" * 32))
+    legit = Ed25519Keys.generate()
+    T.expect("_ed_has_small_order(legit) == False",
+             not _ed_has_small_order(legit.pub))
+
+    k_attack = Ed25519Keys.__new__(Ed25519Keys)
+    k_attack.seed = None
+    k_attack.pub = b"\x01" + b"\x00" * 31
+    for msg in (b"transfer $1M", b"admin=true", b"", b"x" * 1000):
+        S = 1234567
+        R = _ed_encode(_ed_mul(S, _ED_B))
+        forged = R + S.to_bytes(32, "little")
+        T.expect(
+            f"Forged sig rejected for {msg[:12]!r}",
+            not k_attack.verify(msg, forged),
+        )
+
+    seed = bytes.fromhex("9d61b19deffd5a60ba844af492ec2cc4"
+                          "4449c5697b326919703bac031cae7f60")
+    k = Ed25519Keys(seed=seed)
+    T.expect("RFC 8032 vector: legit key still accepted",
+             k.verify(b"", bytes.fromhex(
+                 "e5564300c360ac729086e2cc806e828a"
+                 "84877f1eb8e5d974d873e06522490155"
+                 "5fb8821590a33bacc61e39701cf9b46b"
+                 "d25bf5f0595bbe24655141438e7a100b")))
+
+    for label, n, e in [("n=0", 0, 65537), ("n<0", -1, 65537),
+                        ("e=0", 12345, 0), ("e=1", 12345, 1),
+                        ("e=2", 12345, 2)]:
+        try:
+            RSAKeys(n=n, e=e)
+            T.fail(f"RSAKeys {label} → X509Error", "принят")
+        except X509Error:
+            T.ok(f"RSAKeys {label} → X509Error")
+
+    from x509kit.x509 import (der_seq as _ds, der_int as _di,
+                              der_null as _dn, der_bitstring as _dbs,
+                              encode_oid as _eo)
+    zero_rsa_pkcs1 = _ds(_di(0), _di(65537))
+    zero_spki = _ds(
+        _ds(_eo("1.2.840.113549.1.1.1"), _dn()),
+        _dbs(zero_rsa_pkcs1),
+    )
+    try:
+        RSAKeys.from_public_der(zero_spki)
+        T.fail("RSA SPKI n=0 → X509Error", "принят")
+    except X509Error:
+        T.ok("RSA SPKI n=0 → X509Error")
+
+    k = RSAKeys.generate(2048)
+    assert k.e == 65537 and k.n > 0
+    T.ok("RSAKeys.generate happy path")
+
+    k = Ed25519Keys.generate()
+    sig = k.sign(b"test")
+    T.expect("Ed25519 legitimate sign/verify после фикса",
+             k.verify(b"test", sig))
+
+
+def test_ecdsa_invalid_point():
+    hr("29. ECDSA: invalid curve point / point at infinity")
+
+    from x509kit.x509 import _ec_decode_point, EC_CURVES, OID_PRIME256V1
+
+    c256 = EC_CURVES[OID_PRIME256V1]
+    T.expect("decode: пустой ввод → None",
+             _ec_decode_point(b"", c256) is None)
+    T.expect("decode: 0x00 (point at infinity) → None",
+             _ec_decode_point(b"\x00", c256) is None)
+    T.expect("decode: 0x04||0*64 ((0,0)) → None",
+             _ec_decode_point(b"\x04" + b"\x00" * 64, c256) is None)
+    # x=0 compressed: для P-256 b — QR mod p, поэтому существует валидная
+    # точка (0, ±sqrt(b)). Тест принимает оба исхода: None или валидная
+    # точка на кривой. Раньше ошибочно ожидался только None.
+    _pt0 = _ec_decode_point(b"\x02" + b"\x00" * 32, c256)
+    if _pt0 is None:
+        T.ok("decode: 0x02||0 (compressed x=0) → None")
+    else:
+        _x0, _y0 = _pt0
+        _ok = (_y0 * _y0 - (_x0 ** 3 + c256["a"] * _x0 + c256["b"])) % c256["p"] == 0
+        T.expect("decode: 0x02||0 (compressed x=0) → valid point on curve",
+                 _ok)
+    # Явно невалидный tag — гарантированный None
+    T.expect("decode: tag 0x05 (unknown) → None",
+             _ec_decode_point(b"\x05" + b"\x00" * 32, c256) is None)
+    # b"\xff"*32 = 2^256 - 1 > p for P-256 and fits in 32 bytes.
+    # Раньше было (1<<256).to_bytes(32) — OverflowError (257 бит).
+    big = b"\xff" * 32
+    T.expect("decode: x >= p → None",
+             _ec_decode_point(b"\x04" + big + b"\x00" * 32, c256) is None)
+
+    # NB: 0x02||0*32 НЕ в списке — для P-256 это легальная compressed-точка
+    # (x=0, y=±sqrt(b), где b — QR mod p). Проверка уравнения кривой ниже
+    # отсекает только реально невалидные точки.
+    for label, raw in [
+        ("0x00 (infinity)",    b"\x00"),
+        ("0x04||0*64 ((0,0))", b"\x04" + b"\x00" * 64),
+        ("0x04||0*32||0*32",   b"\x04" + b"\x00" * 64),   # (0,0) снова
+    ]:
+        try:
+            ECDSAKeys.from_public_bytes(raw, curve="P-256")
+            T.fail(f"from_public_bytes {label} → X509Error", "принят")
+        except X509Error:
+            T.ok(f"from_public_bytes {label} → X509Error")
+
+    for label, pt in [
+        ("(0,0)",       (0, 0)),
+        ("(1,1)",       (1, 1)),
+        ("x out of p",  (1 << 300, 1)),
+        ("non-int",     ("a", "b")),
+        ("not a tuple", [1, 2]),
+    ]:
+        try:
+            ECDSAKeys(OID_PRIME256V1, point=pt)
+            T.fail(f"ECDSAKeys(point={label}) → X509Error", "принят")
+        except X509Error:
+            T.ok(f"ECDSAKeys(point={label}) → X509Error")
+        except (TypeError, ValueError):
+            T.ok(f"ECDSAKeys(point={label}) → TypeError/ValueError")
+
+    k_bad = ECDSAKeys.__new__(ECDSAKeys)
+    k_bad.curve_oid = OID_PRIME256V1
+    k_bad.curve = c256
+    k_bad.d = None
+    k_bad.point = (0, 0)
+
+    forged = bytes.fromhex("30440220" + "00" * 32 + "0220" + "00" * 32)
+    T.expect("Forged sig rejected even with bogus point",
+             not k_bad.verify(b"any", forged, "sha256"))
+
+    for curve in ("P-256", "P-384", "P-521", "secp256k1"):
+        k = ECDSAKeys.generate(curve)
+        h = {"P-256": "sha256", "P-384": "sha384",
+             "P-521": "sha512", "secp256k1": "sha256"}[curve]
+        sig = k.sign(b"test", h)
+        T.expect(f"{curve}: legit key after fix", k.verify(b"test", sig, h))
+
+    k = ECDSAKeys.generate("P-256")
+    k2 = ECDSAKeys.from_public_der(k.to_public_der())
+    T.expect("from_public_der round-trip", k2.point == k.point)
+
+
+def test_weak_rsa_warning_paths():
+    hr("30. Weak RSA warning on every construction path")
+
+    import warnings
+    from x509kit.x509 import der_seq as _ds, der_int as _di
+
+    weak_n = (1 << 1023) * 3 + 1
+    weak_e = 65537
+    strong_n = (1 << 2047) * 3 + 1
+
+    def count(fn):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", X509Warning)
+            try:
+                fn()
+            except Exception:
+                pass
+            return [x for x in w
+                    if issubclass(x.category, X509Warning)]
+
+    T.expect("direct RSAKeys(n=1024) → 1 warning",
+             len(count(lambda: RSAKeys(n=weak_n, e=weak_e))) == 1)
+
+    pkcs1 = _ds(_di(weak_n), _di(weak_e))
+    T.expect("from_public_der weak → 1 warning",
+             len(count(lambda: RSAKeys.from_public_der(pkcs1))) == 1)
+
+    T.expect("from_public_bytes(pkcs1) weak → 1 warning",
+             len(count(lambda: RSAKeys.from_public_bytes(
+                 pkcs1, fmt="pkcs1"))) == 1)
+
+    priv_pkcs1 = _ds(
+        _di(0), _di(weak_n), _di(weak_e),
+        _di(1), _di(1), _di(1), _di(1), _di(1), _di(1),
+    )
+    T.expect("from_private_der weak → 1 warning",
+             len(count(lambda: RSAKeys.from_private_der(priv_pkcs1))) == 1)
+
+    T.expect("direct RSAKeys(n=2048) → 0 warnings",
+             len(count(lambda: RSAKeys(n=strong_n, e=weak_e))) == 0)
+
+    ca_key = Ed25519Keys.generate()
+    ca = (CertificateBuilder(is_ca=True)
+          .add_subject({"CN": "Weak Test CA"})
+          .add_public_key(ca_key)
+          .add_serial_random().add_validity(days=30)
+          .add_basic_constraints(path_len=0)
+          .add_key_usage("keyCertSign", "cRLSign")
+          .self_signed().sign(ca_key))
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always", X509Warning)
+        weak_key = RSAKeys(n=weak_n, e=weak_e)
+        (CertificateBuilder()
+            .add_subject({"CN": "leaf.weak"})
+            .add_issuer(ca)
+            .add_public_key(weak_key)
+            .add_serial_random().add_validity(days=30)
+            .add_san_dns("leaf.weak")
+            .sign(ca_key))
+        ws = [x for x in w if issubclass(x.category, X509Warning)]
+        # Слабое RSA объявляется РОВНО ОДИН РАЗ через RSAKeys.__init__.
+        # add_public_key и sign больше не должны дублировать.
+        T.expect("builder use of weak key: exactly 1 warning",
+                 len(ws) == 1,
+                 f"got {len(ws)} warnings: "
+                 + " | ".join(str(x.message)[:60] for x in ws))
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always", X509Warning)
+        RSAKeys(n=weak_n, e=weak_e)
+        filename = w[0].filename if w else ""
+        T.expect("warn stacklevel points to user code, not x509.py",
+                 "x509.py" not in filename,
+                 f"got filename: {filename}")
+
+
+
 def main():
     print("╔" + "═" * 70 + "╗")
     print("║  x509kit — полный прогон" + " " * 46 + "║")
@@ -1642,6 +2288,12 @@ def main():
         test_revocation_network()
         test_cms_parsing()
         test_cms_sign_verify()
+        test_cli()
+        test_builder_dup_guards()
+        test_from_public_bytes()
+        test_zero_pubkey_defense()
+        test_ecdsa_invalid_point()
+        test_weak_rsa_warning_paths()
     except Exception as e:
         print()
         print("\033[31m!!! Непойманное исключение:\033[0m", type(e).__name__, e)
