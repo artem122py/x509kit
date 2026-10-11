@@ -6,6 +6,64 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-11
+
+Security release. Four CVE-class issues in input validation, plus
+unification of weak-key warnings and the CLI.
+
+### Fixed
+- **Ed25519 small-order public keys** (`Ed25519Keys`): reject
+  order-1/2/4/8 points at construction time (`__init__`,
+  `from_public_bytes`). With A = identity the verification equation
+  `[S]B = R + [k]A` reduces to `[S]B = R`, allowing signature forgery
+  for any message without the private key. `_ed_verify` also rejects
+  small-order A and R (defense in depth).
+- **ECDSA invalid curve points** (`_ec_decode_point`,
+  `ECDSAKeys.__init__`): reject the SEC1 point at infinity (`0x00`),
+  `(0,0)`, out-of-field coordinates, and any point not satisfying
+  `y^2 == x^3 + ax + b (mod p)`. Previously, uncompressed `0x04||X||Y`
+  was accepted without curve-equation validation.
+- **RSA zero/invalid keys** (`RSAKeys.__init__`): reject `n <= 0`,
+  `e <= 0`, `e < 3`, `e` even. Closes the classic `pow(m, 1, n) = m`
+  trivial-signature case.
+
+### Changed
+- Weak-RSA warning is emitted exactly once per user-constructed key,
+  from `RSAKeys.__init__`. Parsing `Cert`/`CSR`/`CRL`/`OCSP`/`CMS`
+  passes `_warn_weak=False`, so `builder.sign()` no longer duplicates
+  the warning via internal SPKI parsing.
+- `_check_rsa_key` is now a no-op (kept for backward compatibility).
+
+### Added
+- CLI: `x509kit info / keygen / csr / verify / cms / pkcs12 / crl`
+  (entry point `x509kit`, also `python -m x509kit.cli`).
+- `RSAKeys.from_public_bytes(data, fmt="spki"|"pkcs1")` — explicit
+  DER format.
+- `Ed25519Keys.from_public_bytes(32 raw bytes)` — RFC 8032 §5.1.2.
+- `ECDSAKeys.from_public_bytes(sec1, curve="P-256")` — X9.62 §4.3.6,
+  uncompressed and compressed forms.
+- `CertificateBuilder` / `CSRBuilder`: duplicate field setters
+  (`add_subject`, `add_issuer`, `add_public_key`, `add_serial`,
+  `add_serial_random`, `self_signed`) now raise `X509Error` with a
+  hint instead of silently overwriting.
+- `Cert.info()` prints SAN / KeyUsage / BasicConstraints / EKU /
+  SKI / AKI / AIA / CRLDP as human-readable strings
+  (`openssl x509 -text` style) instead of hex dumps.
+
+### Tests
+- `test_all.py`: 481 checks (up from 366 in 0.7.0).
+  New sections 26–30:
+    - 26. Builder guards (duplicate calls)
+    - 27. `from_public_bytes` (Ed25519 / ECDSA / RSA)
+    - 28. Zero public key / small-order defenses
+    - 29. ECDSA: invalid curve point / point at infinity
+    - 30. Weak RSA warning on every construction path
+
+### Credit
+Reported by the maintainer (artem122py) during review of the
+key-validation code paths.
+
+
 ### Added (0.7.0)
 
 - CMS (RFC 5652) SignedData (`x509kit.cms`) — parsing, signing, verification
