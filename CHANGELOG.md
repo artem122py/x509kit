@@ -6,6 +6,100 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-11
+
+CLI release. The command line grew from a thin wrapper into a full
+certificate toolkit, closing the "must-have" list discussed after 0.9.1.
+
+### Added
+
+**CLI (namespace `cert`)**
+- `cert generate` — self-signed certificate from a private key
+  (`--key`, `--subject`, `--days`, `--san`, `--is-ca`, `--path-len`,
+  `--eku`, `--crl-dp`, `--aia-ocsp`, `--aia-issuers`, `--hash`)
+- `cert sign` — issue a certificate from a CSR using a CA key
+  (`--ca`, `--ca-key`, `--csr`, `--days`, `--is-ca`, `--path-len`,
+  `--eku`, `--no-copy-ext`, `--hash`)
+- `cert info` / `cert verify` — aliases for the top-level commands
+- `cert fingerprint` — DER or SPKI fingerprint
+  (`--algo`, `--spki`, `--no-colon`)
+- `cert chain` — sort a multi-cert PEM bundle leaf → root
+- `cert matches-key` — check that a private or public key matches
+  a certificate
+
+**CLI (namespace `key`)**
+- `key info` — type, size, public parameters
+- `key pub` — extract a public key from a private one
+- `key convert` — PEM ↔ DER
+
+**CLI (other)**
+- `csr verify` — validate a PKCS#10 signature without issuing
+- `crl create` — issue a CRL from a CA cert and key
+  (`--revoke` repeatable, `--reason`, `--days`, `--crl-number`)
+- `p12 create` / `p12 export` — build or split a PKCS#12 container
+- `p12` — alias for `pkcs12`
+- `verify --crl FILE` — revocation check during chain verification
+- `verify --ocsp-response FILE` — OCSP-based revocation check
+- `version` — subcommand equivalent of `--version`
+- `hash FILE...` — hex hash of files (`--algo`)
+- bare `x509kit` with no arguments prints help and exits 0
+
+**Library**
+- `Ed25519Keys.from_public_bytes(32 raw bytes)` (RFC 8032 §5.1.2)
+- `ECDSAKeys.from_public_bytes(sec1, curve="P-256")` (X9.62 §4.3.6,
+  uncompressed and compressed forms)
+- `RSAKeys.from_public_bytes(data, fmt="spki"|"pkcs1")`
+- `CertificateBuilder` / `CSRBuilder`: duplicate-field setters now
+  raise `X509Error` with a hint
+- `Cert.info()` prints SAN / KeyUsage / BasicConstraints / EKU /
+  SKI / AKI / AIA / CRLDP in `openssl x509 -text` style
+
+### Fixed
+- Duplicate `extendedKeyUsage` extension (RFC 5280 §4.2). OpenSSL 3.x
+  rejects certificates with more than one copy of any extension, so
+  `from_csr(copy_extensions=True)` combined with
+  `add_extended_key_usage(...)` produced an invalid certificate.
+  `CertificateBuilder.add_extended_key_usage` and
+  `CSRBuilder.add_extended_key_usage` are now idempotent — a second
+  call replaces the previous EKU instead of appending.
+  `_build_cert_der` also guards against duplicate OIDs across all
+  extensions and raises `X509Error` before signing.
+- `CSR.__str__` now shows the ECDSA curve name
+  (`ECDSA P-256 (256 bit)`) instead of the raw OID.
+
+### Changed
+- `_check_rsa_key` is now a no-op; the weak-key warning is emitted
+  exactly once from `RSAKeys.__init__`
+
+### Tests
+- `test_all.py`: 530 checks (up from 481 in 0.9.0)
+  - section 26: builder duplicate-call guards
+  - section 27: `from_public_bytes` (Ed25519 / ECDSA / RSA)
+  - section 28: zero public key / small-order defenses
+  - section 29: ECDSA invalid curve point / point at infinity
+  - section 30: weak RSA warning on every construction path
+  - section 31: CLI must-have namespaces
+
+### Cross-verified
+- `openssl genpkey` / `openssl req -new` CSR (Ed25519, RSA-2048,
+  ECDSA P-256) → `x509kit csr verify` → OK
+- OpenSSL CSR → `x509kit cert sign` → `openssl verify` → OK
+- `x509kit csr create` (Ed25519, RSA-2048, ECDSA P-256) →
+  `openssl req -verify` → "Certificate request self-signature verify OK"
+
+
+### Fixed
+- Duplicate `extendedKeyUsage` extension (RFC 5280 §4.2). OpenSSL 3.x
+  rejects certificates with more than one copy of any extension, so
+  `from_csr(copy_extensions=True)` combined with
+  `add_extended_key_usage(...)` produced an invalid certificate.
+  Both `CertificateBuilder.add_extended_key_usage` and
+  `CSRBuilder.add_extended_key_usage` are now idempotent — a second
+  call replaces the previous EKU instead of appending.
+  `_build_cert_der` also guards against duplicate OIDs across all
+  extensions and raises `X509Error` before signing.
+
+
 ## [0.9.1] - 2026-10-11
 
 ### Added
